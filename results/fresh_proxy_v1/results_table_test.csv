@@ -1,0 +1,4 @@
+Method,Policy_Key,Samples,Output_Coverage_%,Delivered_Cont_Viol_%,Cont_Viol_%,Cont_95%_CI,Abs_Reduction_pp,Full_Viol_%,Avg_Interventions,Dist_1,Dist_2,Entropy,Latency_s,Filter_Latency_s,Overhead_%,Peak_VRAM_MB
+P0_baseline,P0,400,100.0,6.0,6.0,"[4.0, 8.5]","+0.0 [+0.0, +0.0]",28.5,0.0,0.4143,0.8479,10.102,0.595,0.0,0.0,1840.9
+P5_adaptive_trajectory,P5,400,100.0,4.75,4.75,"[3.0, 7.0]","+1.2 [-0.5, +3.0]",27.0,1.39,0.4287,0.8667,10.203,0.721,0.0,21.2,1840.9
+P6_adaptive_ensemble,P6,400,100.0,5.25,5.25,"[3.2, 7.8]","+0.8 [-1.2, +2.5]",26.0,1.68,0.4265,0.8685,10.226,0.852,0.0,43.2,1840.9

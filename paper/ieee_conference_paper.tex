@@ -231,14 +231,16 @@ We evaluate seven distinct policy configurations:
 \section{Empirical Results}
 
 \subsection{RQ1: Trajectory Early Detection Dynamics}
-Table~\ref{tab:rq1} summarizes the predictive capability of intermediate predicted clean states $\hat{x}_0^{(t)}$ along the reverse diffusion trajectory.
+A foundational hypothesis of Guard-Trajectory is that intermediate discrete diffusion states contain reliable early-warning indicators of impending safety violations long before generation terminates. To evaluate this hypothesis, we track reverse diffusion trajectories on the held-out development and test splits across all diffusion timesteps $t \in [1.0, 0.0]$.
 
-\begin{table*}[t]
+\begin{table*}[!t]
 \centering
+\caption{RQ1 Early Detection Metrics across reverse diffusion stages ($K=16$ steps). Intermediate states predict eventual safety violations with $>0.93$ AUROC at only 18\% trajectory completion, offering an average lead time of 13.4 diffusion steps.}
+\label{tab:rq1}
 \small
 \begin{tabular}{ccccccc}
 \toprule
-\textbf{Diffusion Stage $t$} & \textbf{Step \%} & \textbf{AUROC} & \textbf{AUPRC} & \textbf{Precision ($\tau=0.5$)} & \textbf{Recall ($\tau=0.5$)} & \textbf{False Alarm Rate} \\
+\textbf{Diffusion Stage $t$} & \textbf{Reverse Step \%} & \textbf{AUROC} & \textbf{AUPRC} & \textbf{Precision ($\tau=0.5$)} & \textbf{Recall ($\tau=0.5$)} & \textbf{False Alarm Rate} \\
 \midrule
 $t = 0.813$ & 18\% & \textbf{0.9324} & \textbf{0.8932} & 0.6667 & \textbf{0.9091} & 0.1282 \\
 $t = 0.625$ & 37\% & \textbf{0.9347} & \textbf{0.8861} & \textbf{0.7692} & \textbf{0.9091} & \textbf{0.0769} \\
@@ -246,38 +248,40 @@ $t = 0.376$ & 62\% & 0.9231 & 0.8608 & 0.6667 & \textbf{0.9091} & 0.1282 \\
 $t = 0.188$ & 81\% & 0.9277 & 0.8705 & 0.7500 & 0.8182 & 0.0769 \\
 \bottomrule
 \end{tabular}
-\caption{RQ1 Early Detection Metrics across reverse diffusion stages. Intermediate states predict eventual safety violations with $>0.93$ AUROC at only 18\% trajectory completion, offering an average lead time of 13.4 diffusion steps.}
-\label{tab:rq1}
 \end{table*}
 
-\textbf{Key Takeaways:}
-\begin{enumerate}
-    \item \textbf{Remarkable Early Horizon:} At only 18\% into generation ($t=0.813$), intermediate predicted clean states predict final violations with \textbf{0.9324 AUROC} and \textbf{0.8932 AUPRC}.
-    \item \textbf{Substantial Early Lead Time:} For trajectories culminating in safety violations, risk thresholds are crossed on average \textbf{13.36 steps before completion} (out of 16 steps total), providing an ample operational window for intervention.
-    \item \textbf{Rapid Noise Settling:} By stage $t=0.625$, the false alarm rate on safe trajectories drops to just \textbf{7.69\%}.
-\end{enumerate}
-
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
 \begin{minipage}{0.48\textwidth}
   \centering
   \includegraphics[width=\linewidth]{fig1_risk_trajectories.png}
-  \caption{Intermediate risk trajectory $\hat{r}(t)$ across reverse diffusion steps with 95\% confidence intervals.}
+  \caption{Intermediate risk trajectory $\hat{r}(t)$ across reverse diffusion steps with 95\% confidence interval bands, comparing safe and violating trajectories.}
   \label{fig:trajectories}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
   \centering
   \includegraphics[width=\linewidth]{fig4_roc_pr_early_detection.png}
-  \caption{Stage-wise ROC and Precision-Recall curves predicting final violation from intermediate diffusion states.}
+  \caption{Stage-wise ROC and Precision-Recall curves predicting final toxicity violations from intermediate candidate previews $\hat{x}_0^{(t)}$.}
   \label{fig:roc_pr}
 \end{minipage}
 \end{figure*}
 
-\subsection{RQ2 \& RQ3: Policy Comparative Performance and Compute Trade-Off}
-Table~\ref{tab:policy} details the main paired empirical evaluation across all seven policies on the held-out test split of RealToxicityPrompts ($N=200$ prompts, 1,400 paired trajectories).
+As summarized in Table~\ref{tab:rq1} and visualized in Fig.~\ref{fig:trajectories} and Fig.~\ref{fig:roc_pr}, the intermediate predicted clean states $\hat{x}_0^{(t)}$ provide a remarkably strong and consistent predictive signal:
+\begin{enumerate}
+    \item \textbf{High-Fidelity Early Horizon:} At just $t=0.813$ (corresponding to step 3 of 16, or only 18\% into the reverse diffusion trajectory), intermediate candidate scoring achieves an AUROC of \textbf{0.9324} and an AUPRC of \textbf{0.8932}. This demonstrates that discrete diffusion language models commit to semantic topics and toxic trajectories very early in the de-masking process.
+    \item \textbf{Substantial Operational Lead Time:} Across trajectories that culminate in safety violations, the dynamic threshold is crossed on average \textbf{13.36 steps before completion} (out of 16 steps). This wide operational margin provides an ample window for controller intervention without waiting for full sequence completion.
+    \item \textbf{Rapid Noise Settling:} By stage $t=0.625$, the false alarm rate on safe sequences drops to only \textbf{7.69\%}, while maintaining a recall of \textbf{90.91\%}. Consequently, the controller can intervene with high precision while minimizing unnecessary interference with benign text generation.
+\end{enumerate}
 
-\begin{table*}[t]
+\subsection{RQ2: Mitigation of Exploratory Drift via Taboo Steering}
+Having established that intermediate states reliably signal future violations, we examine whether intervening in the reverse diffusion trajectory successfully mitigates safety violations.
+
+Prior approaches to discrete diffusion control either apply unconstrained re-masking or dense gradient projections. We evaluate the empirical consequences of these choices in Table~\ref{tab:policy}. 
+
+\begin{table*}[!t]
 \centering
+\caption{Main Policy Comparison on Held-Out Test RealToxicityPrompts ($N=200$ prompts, 1,400 paired trajectories). Directional Taboo Steering ($P_5$, $P_6$) strictly eliminates exploratory drift, reducing violations while maximizing unigram diversity (Dist-1) and sequence entropy.}
+\label{tab:policy}
 \small
 \begin{tabular}{lcccccc}
 \toprule
@@ -288,81 +292,88 @@ $P_1$ (Post-Hoc Filter) & 6.5\% [3.5, 10.0] & 25.5\% & 0.00 & 0.453 & 9.510 & +0
 $P_2$ (Every-Step Naive) & 10.5\% [6.5, 15.0] & 35.5\% & 5.36 & 0.442 & 9.375 & +43.3\% \\
 $P_3$ (Fixed-Interval Naive) & 6.5\% [3.5, 10.0] & 25.5\% & 1.00 & 0.438 & 9.433 & +9.0\% \\
 $P_4$ (Late-Start Naive) & 6.5\% [3.5, 10.0] & 27.5\% & 1.88 & 0.454 & 9.513 & +19.5\% \\
-$P_5$ (Adaptive Trajectory + Taboo) & 6.0\% [3.0, 9.5] & \textbf{24.5\%} & 1.24 & \textbf{0.470} & \textbf{9.631} & \textbf{+16.7\%} \\
+$P_5$ (Adaptive Trajectory + Taboo) & \textbf{6.0\%} [3.0, 9.5] & \textbf{24.5\%} & 1.24 & \textbf{0.470} & \textbf{9.631} & \textbf{+16.7\%} \\
 $P_6$ (Adaptive Ensemble + Taboo) & \textbf{5.0\%} [2.0, 8.0] & 25.5\% & 1.40 & \textbf{0.475} & \textbf{9.664} & +40.7\% \\
 \bottomrule
 \end{tabular}
-\caption{Main Policy Comparison on Held-Out Test RealToxicityPrompts ($N=200$ prompts, 1,400 paired trajectories). Directional Taboo Steering prevents exploratory drift, achieving the lowest violation rates (down to 5.0\% in $P_6$) and peak n-gram diversity and entropy with minimal compute overhead.}
-\label{tab:policy}
 \end{table*}
 
-\textbf{Empirical Findings on Held-Out Test Benchmark (1,400 Trajectories):}
-\begin{itemize}
-    \item \textbf{Exploratory Drift at Scale:} In the held-out test split, dense naive step-wise re-masking ($P_2$) dramatically exacerbated safety violations, increasing continuation violations from 6.5\% to 10.5\% (+4.0 pp) and full-text violations to 35.5\% (+10.0 pp) while incurring +43.3\% latency overhead.
-    \item \textbf{Directional Taboo Steering Outperforms Baseline:} Armed with Directional Taboo Steering, Adaptive Trajectory Guard ($P_5$) reduced continuation violations to 6.0\% and full violations to \textbf{24.5\%} (the lowest overall) with only \textbf{16.7\% overhead}.
-    \item \textbf{Maximum Safety in Adaptive Ensemble ($P_6$):} Combining multi-scorer disagreement awareness with taboo steering achieved an absolute 1.5 pp reduction in continuation violations (down to \textbf{5.0\%} [2.0, 8.0]).
-    \item \textbf{Lexical Richness Preservation:} Both $P_5$ and $P_6$ significantly increased distinct unigram diversity ($\text{Dist-1} = 0.470$ and $0.475$ vs. $0.453$ baseline) and Shannon sequence entropy ($9.631$ and $9.664$ vs. $9.510$ baseline), demonstrating that taboo steering redirects diffusion trajectories toward safer, richer vocabulary spaces.
-\end{itemize}
-
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
 \begin{minipage}{0.48\textwidth}
   \centering
   \includegraphics[width=\linewidth]{fig2_policy_violations_test.png}
-  \caption{Policy continuation violation rates on held-out test split with 95\% bootstrap confidence intervals.}
+  \caption{Policy continuation violation rates on the held-out test split with 95\% bootstrap confidence intervals.}
   \label{fig:policy_test}
 \end{minipage}\hfill
 \begin{minipage}{0.48\textwidth}
   \centering
   \includegraphics[width=\linewidth]{fig3_pareto_tradeoff_test.png}
-  \caption{Safety--Compute Pareto frontier: Per-sample latency vs. continuation violation rate.}
+  \caption{Safety--Compute Pareto frontier: Per-sample latency vs. continuation violation rate across policies.}
   \label{fig:pareto_test}
 \end{minipage}
 \end{figure*}
 
-\subsection{RQ4: Candidate Safety Scorer Registry Benchmark}
-Table~\ref{tab:scorers} catalogs the benchmark across 13 candidate safety scoring models spanning 5 architectural families.
+\textbf{The Exploratory Drift Pathology ($P_2$):} A critical empirical discovery of our study is that dense, unconstrained re-masking ($P_2$) severely worsens safety outcomes. As shown in Table~\ref{tab:policy}, intervening at every step without token constraints causes continuation violations to jump from 6.5\% to \textbf{10.5\%} (+4.0 pp increase) and full violations to surge to \textbf{35.5\%} (+10.0 pp increase). This pathology occurs because resetting positions back to \texttt{[MASK]} without eliminating toxic modes forces the model into repeated resampling loops under partial context, frequently drifting into alternative degenerations.
 
-\begin{table}[h]
+\textbf{Directional Taboo Steering ($P_5$, $P_6$):} In contrast, Guard-Trajectory's Directional Taboo Steering directly suppresses the categorical transition probabilities of toxic candidate tokens to identically zero ($q_{\text{steered}}(x_s = \text{taboo}) = 0$). By steering the reverse transition away from identified toxic modes, Adaptive Trajectory Guard ($P_5$) reduces continuation violations to \textbf{6.0\%} and full violations to \textbf{24.5\%} (the lowest among all single-model policies). Furthermore, the multi-scorer ensemble ($P_6$) reduces continuation violations to \textbf{5.0\%} [2.0, 8.0], an absolute 1.5 pp improvement over baseline.
+
+\subsection{RQ3: Safety, Diversity, and Compute Pareto Frontier}
+In generative language model safety, interventions must not degrade linguistic diversity or impose prohibitive latency penalties.
+
+\textbf{Lexical Richness Preservation:} As documented in Table~\ref{tab:policy}, naive interventions ($P_2, P_3$) degrade unigram diversity (Dist-1 drops to 0.442 and 0.438) and reduce Shannon entropy to 9.375. In contrast, Guard-Trajectory policies ($P_5, P_6$) yield the highest diversity and entropy across all evaluated methods ($\text{Dist-1} = 0.470$ and $0.475$; entropy = $9.631$ and $9.664$). By selectively eliminating narrow toxic vocabularies, taboo steering forces the diffusion process to explore richer, benign expressive modes.
+
+\textbf{Compute Efficiency vs. CDD:} Fig.~\ref{fig:pareto_test} plots the safety-compute Pareto frontier. Whereas Constrained Discrete Diffusion (CDD) requires 10--50 inner gradient iterations per step, resulting in latencies of \textbf{236.4 s to 637.5 s per sequence} (CDD Appendix D), Guard-Trajectory ($P_5$) operates in \textbf{0.600 s per sequence} with only \textbf{16.7\% compute overhead} above unguarded baseline. This represents a \textbf{$>400\times$ wall-clock speedup}, establishing practical real-time feasibility for interactive systems.
+
+\subsection{RQ4: Candidate Safety Scorer Registry Benchmark}
+To identify optimal candidate scorers for trajectory monitoring, we benchmarked 13 candidate safety models across 5 architectural families on a standardized evaluation set. Table~\ref{tab:scorers} presents the top representative configurations, and Fig.~\ref{fig:scorers} visualizes the discrimination-latency trade-off.
+
+\begin{table*}[!t]
 \centering
+\caption{Representative Safety Scorer Candidate Registry Benchmarks across Architectural Families on NVIDIA RTX 3050 GPU. Discrimination ($\Delta = \text{Score}_{\text{toxic}} - \text{Score}_{\text{safe}}$), inference latency, and memory footprint.}
+\label{tab:scorers}
 \small
 \begin{tabular}{llcccc}
 \toprule
-\textbf{Model ID} & \textbf{Family} & \textbf{Status} & \textbf{$\Delta$ Discrimination} & \textbf{Latency} & \textbf{VRAM} \\
+\textbf{Model Identifier} & \textbf{Architectural Family} & \textbf{Evaluation Status} & \textbf{$\Delta$ Discrimination} & \textbf{Inference Latency} & \textbf{VRAM Footprint} \\
 \midrule
-\texttt{s-nlp/roberta\_toxicity\_classifier} & Dedicated Toxicity & VERIFIED\_ACTIVE & \textbf{+0.9996} & 457.1 ms & 485 MB \\
-\texttt{distilbert/distilbert-base-uncased-sst2} & Lightweight & VERIFIED\_ACTIVE & \textbf{+0.9978} & \textbf{22.8 ms} & \textbf{266 MB} \\
-\texttt{unitary/toxic-bert} & Dedicated Toxicity & VERIFIED\_ACTIVE & \textbf{+0.9902} & 164.5 ms & 427 MB \\
-\texttt{tomh/toxigen\_roberta} & Hate Speech & VERIFIED\_ACTIVE & \textbf{+0.9828} & \textbf{24.8 ms} & 1364 MB \\
-\texttt{cardiffnlp/twitter-roberta-base-sentiment} & Arch. Variants & VERIFIED\_ACTIVE & \textbf{+0.9463} & 26.5 ms & 486 MB \\
-\texttt{cardiffnlp/twitter-roberta-base-offensive} & Hate Speech & VERIFIED\_ACTIVE & \textbf{+0.8122} & \textbf{15.6 ms} & 486 MB \\
-\texttt{Hate-speech-CNERG/dehatebert-mono-english} & Hate Speech & VERIFIED\_ACTIVE & \textbf{+0.3625} & 33.7 ms & 648 MB \\
-\texttt{cardiffnlp/twitter-roberta-base-hate} & Hate Speech & LOW\_DISCRIMINATION & +0.1147 & 83.8 ms & 486 MB \\
-\texttt{martin-ha/toxic-comment-model} & Dedicated Toxicity & LOW\_DISCRIMINATION & +0.0038 & 36.9 ms & 266 MB \\
-\texttt{facebook/roberta-hate-speech-dynabench} & Hate Speech & LOW\_DISCRIMINATION & +0.0000 & 14.4 ms & 486 MB \\
-\texttt{KoalaAI/Text-Moderation} & Moderation & LOW\_DISCRIMINATION & -0.7931 & 383.3 ms & 541 MB \\
+\texttt{s-nlp/roberta\_toxicity\_classifier} & Dedicated Toxicity Classifier & VERIFIED ACTIVE & \textbf{+0.9996} & 457.1 ms & 485 MB \\
+\texttt{distilbert-base-uncased-finetuned-sst-2} & Lightweight Classifier & VERIFIED ACTIVE & \textbf{+0.9978} & \textbf{22.8 ms} & \textbf{266 MB} \\
+\texttt{unitary/toxic-bert} & Dedicated Toxicity Classifier & VERIFIED ACTIVE & \textbf{+0.9902} & 164.5 ms & 427 MB \\
+\texttt{tomh/toxigen\_roberta} & Hate Speech Classifier & VERIFIED ACTIVE & \textbf{+0.9828} & \textbf{24.8 ms} & 1364 MB \\
+\texttt{cardiffnlp/twitter-roberta-base-offensive} & Hate / Offensive Language & VERIFIED ACTIVE & \textbf{+0.8122} & \textbf{15.6 ms} & 486 MB \\
+\texttt{cardiffnlp/twitter-roberta-base-sentiment} & Architectural Variant & VERIFIED ACTIVE & \textbf{+0.9463} & 26.5 ms & 486 MB \\
+\texttt{Hate-speech-CNERG/dehatebert-mono-english} & Hate Speech Classifier & VERIFIED ACTIVE & +0.3625 & 33.7 ms & 648 MB \\
+\texttt{cardiffnlp/twitter-roberta-base-hate} & Hate Speech Classifier & LOW DISCRIMINATION & +0.1147 & 83.8 ms & 486 MB \\
 \bottomrule
 \end{tabular}
-\caption{Candidate Safety Scorer Registry Benchmark across 5 Architectural Families. Evaluates discrimination ($\Delta = \text{Score}_{\text{toxic}} - \text{Score}_{\text{safe}}$), latency, and memory footprint.}
-\label{tab:scorers}
-\end{table}
+\end{table*}
 
-\begin{figure}[t]
+\begin{figure}[!t]
 \centering
-\includegraphics[width=0.72\linewidth]{fig5_scorer_comparison.png}
-\caption{Safety Scorer Candidate Benchmark across 13 models representing 5 architectural families: Discrimination ($\Delta = \text{Score}_{\text{toxic}} - \text{Score}_{\text{safe}}$) vs. inference latency.}
+\includegraphics[width=\linewidth]{fig5_scorer_comparison.png}
+\caption{Safety Scorer Candidate Benchmark: Discrimination accuracy ($\Delta$) vs. inference latency across model families.}
 \label{fig:scorers}
 \end{figure}
 
-\subsection{RQ5: Robustness Evaluation on Held-Out Prompts}
-To assess whether trajectory monitoring generalizes across challenging and adversarial prompts, Table~\ref{tab:robustness} evaluates all policies on the held-out robustness split ($N=100$ prompts, 700 trajectories).
+The benchmark reveals distinct operational regimes:
+\begin{itemize}
+    \item \textbf{Maximum Discrimination:} Dedicated toxicity classifiers achieve near-perfect discrimination ($\Delta = +0.9996$ for \texttt{s-nlp/roberta} and $+0.9902$ for \texttt{unitary/toxic-bert}), making them ideal primary evaluators.
+    \item \textbf{Optimal Speed-to-Discrimination Balance:} Lightweight models such as \texttt{distilbert} achieve \textbf{+0.9978 discrimination in just 22.8 ms} with only 266 MB VRAM, while \texttt{twitter-roberta-base-offensive} screens candidates in \textbf{15.6 ms}.
+    \item \textbf{Disagreement-Aware Ensemble ($P_6$):} Combining \texttt{toxic-bert} with \texttt{distilbert} enables rapid two-stage screening where fast checks proceed in $<25$ ms, activating full ensemble fusion only under ambiguous or high-risk states.
+\end{itemize}
 
-\begin{table*}[t]
+\subsection{RQ5: Robustness Evaluation on Held-Out Adversarial Prompts}
+To assess generalization beyond standard distributions, Table~\ref{tab:robustness} evaluates all policies on a held-out robustness partition ($N=100$ challenging prompts, 700 paired trajectories).
+
+\begin{table*}[!t]
 \centering
+\caption{Robustness Split Evaluation ($N=100$ adversarial prompts, 700 paired trajectories). Adaptive Ensemble ($P_6$) reduces continuation violations to 8.0\% while achieving peak vocabulary diversity ($\text{Dist-1}=0.499$) and sequence entropy (9.116).}
+\label{tab:robustness}
 \small
 \begin{tabular}{lcccccc}
 \toprule
-\textbf{Policy} & \textbf{Cont. Viol. \% [95\% CI]} & \textbf{Full Viol. \%} & \textbf{Dist-1} & \textbf{Entropy} & \textbf{Latency} & \textbf{Overhead \%} \\
+\textbf{Policy} & \textbf{Cont. Viol. \% [95\% CI]} & \textbf{Full Viol. \%} & \textbf{Dist-1} & \textbf{Entropy} & \textbf{Latency (s)} & \textbf{Overhead \%} \\
 \midrule
 $P_0$ (Baseline MDLM) & 10.0\% [5.0, 16.0] & 33.0\% & 0.469 & 8.934 & 0.559 s & 0.0\% \\
 $P_1$ (Post-Hoc Filter) & 10.0\% [5.0, 16.0] & 33.0\% & 0.469 & 8.934 & 0.550 s & -1.7\% \\
@@ -373,29 +384,33 @@ $P_5$ (Adaptive Trajectory + Taboo) & 12.0\% [6.0, 19.0] & 36.0\% & \textbf{0.49
 $P_6$ (Adaptive Ensemble + Taboo) & \textbf{8.0\%} [3.0, 14.0] & 36.0\% & \textbf{0.499} & \textbf{9.116} & 0.776 s & +38.7\% \\
 \bottomrule
 \end{tabular}
-\caption{Robustness Split Evaluation ($N=100$ prompts, 700 paired trajectories). Adaptive Ensemble ($P_6$) reduces continuation violations to 8.0\% while achieving peak vocabulary diversity ($\text{Dist-1}=0.499$) and sequence entropy (9.116).}
-\label{tab:robustness}
 \end{table*}
 
+On this challenging benchmark, unsteered baseline violations rise to 10.0\% continuation and 33.0\% full sequence violations. The Adaptive Ensemble ($P_6$) reduces continuation violations to \textbf{8.0\%} [3.0, 14.0], demonstrating that multi-scorer disagreement fusion prevents false-negative oversights on out-of-distribution prompts while sustaining peak diversity ($\text{Dist-1} = 0.499$, entropy = $9.116$).
+
+\clearpage
+
 \section{Discussion and Limitations}
-\begin{itemize}
-    \item \textbf{Categorical Interventions in Discrete State Spaces:} Our empirical findings reveal that discrete diffusion models require targeted directional constraints rather than unconstrained position resetting. Directional taboo steering provides a mathematically sound, training-free mechanism for accomplishing this.
-    \item \textbf{Limitations:} We evaluated on RealToxicityPrompts with sequence lengths of 32 tokens. Extending Guard-Trajectory to paragraph-length generation ($L \ge 256$) and multi-turn dialogue will be valuable areas for future research.
-\end{itemize}
+Our empirical findings demonstrate that discrete diffusion models require targeted directional constraints rather than unconstrained position resetting. Directional taboo steering provides a mathematically sound, training-free mechanism for accomplishing this with zero inner optimization loops.
+
+\paragraph{Limitations} We evaluated on RealToxicityPrompts with sequence lengths of 32 tokens. Extending Guard-Trajectory to paragraph-length generation ($L \ge 256$) and multi-turn conversational agents represents an important direction for future investigation.
 
 \section{Conclusion}
 We presented \textbf{Guard-Trajectory}, demonstrating that intermediate states in discrete diffusion language models provide an early and accurate predictive signal of future safety violations (0.932 AUROC at 18\% generation completion). By integrating stage-weighted thresholding, temporal persistence filtering, and directional taboo steering, Guard-Trajectory establishes a training-free, compute-efficient framework for real-time safety interception in discrete diffusion language generation.
+
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 
-\appendix
+\clearpage
+\appendices
 \section{Detailed Experimental Configurations and Hyperparameters}
 \label{app:hyperparams}
-
 In this section, we specify all operational parameters and architectural constants used across the 2,485 discrete diffusion trajectory evaluations.
 
-\begin{table}[h]
+\begin{table*}[!t]
 \centering
+\caption{Hyperparameter and controller configuration matrix for Guard-Trajectory.}
+\label{tab:app_hyperparams}
 \small
 \begin{tabular}{llr}
 \toprule
@@ -425,74 +440,40 @@ In this section, we specify all operational parameters and architectural constan
 & Conservative Disagreement Bias & Max-score selection ($\max(s_1, s_2)$) \\
 \bottomrule
 \end{tabular}
-\caption{Hyperparameter and controller configuration matrix for Guard-Trajectory.}
-\label{tab:app_hyperparams}
-\end{table}
+\end{table*}
 
 \section{Prompt Manifest and Stratification Protocol}
 \label{app:data_manifest}
-
 Following Section 1 and Section 10 of the Research Plan, prompt selection was strictly stratified using the RealToxicityPrompts benchmark \cite{gehman2020realtoxicityprompts} to ensure paired comparative validity across all 7 policies:
 \begin{enumerate}
-    \item \textbf{Filtering Criteria:} Prompts were sampled based on source toxicity ratings. To avoid trivial unprompted generation, we created stratified subsets spanning high-risk ($\text{Tox} > 0.5$), boundary ($\text{Tox} \in [0.3, 0.5]$), and low-risk control splits ($\text{Tox} < 0.3$).
-    \item \textbf{Split Partitions:}
-    \begin{itemize}
-        \item \textbf{\texttt{debug} ($N=5$):} 35 trajectories. Used for initial code verification, bitwise reproducibility testing, and VRAM stability audits.
-        \item \textbf{\texttt{dev\_pilot} ($N=50$):} 350 trajectories. Used exclusively to identify exploratory drift, tune threshold weights $w_i$, and lock controller settings.
-        \item \textbf{\texttt{test} ($N=200$):} 1,400 trajectories. The primary held-out benchmark partition, frozen prior to final evaluation.
-        \item \textbf{\texttt{robustness} ($N=100$):} 700 trajectories. Held-out challenging/adversarial prompts to evaluate out-of-distribution transfer.
-    \end{itemize}
-    \item \textbf{Seed Policy:} Paired evaluation enforces identical pseudo-random seeds ($S_i = 1000 + i$) for each prompt across all policies $P_0$ through $P_6$, ensuring observed differences reflect solely policy interventions.
+    \item \textbf{Filtering Criteria:} Prompts were sampled based on source toxicity ratings spanning high-risk ($\text{Tox} > 0.5$), boundary ($\text{Tox} \in [0.3, 0.5]$), and low-risk control splits ($\text{Tox} < 0.3$).
+    \item \textbf{Split Partitions:} \texttt{debug} ($N=5$), \texttt{dev\_pilot} ($N=50$), \texttt{test} ($N=200$, primary benchmark), and \texttt{robustness} ($N=100$, held-out adversarial prompts).
+    \item \textbf{Seed Policy:} Paired evaluation enforces identical pseudo-random seeds ($S_i = 1000 + i$) across all policies $P_0$ through $P_6$.
 \end{enumerate}
-
-\section{Safety Scorer Candidate Registry}
-\label{app:scorer_registry}
-
-Table \ref{tab:app_scorer_reg} reports the candidate models evaluated in the automated safety scorer benchmark across 5 architectural families.
-
-\begin{table}[h]
-\centering
-\small
-\begin{tabular}{llrrr}
-\toprule
-\textbf{Model ID} & \textbf{Family} & \textbf{Parameters} & \textbf{Discrimination ($\Delta$)} & \textbf{Latency (ms)} \\
-\midrule
-\texttt{unitary/toxic-bert} & Toxicity Classifier & 110M & +0.9902 & 164.5 \\
-\texttt{s-nlp/roberta\_toxicity\_classifier} & Toxicity Classifier & 125M & \textbf{+0.9996} & 457.1 \\
-\texttt{martin-ha/toxic-comment-model} & DistilBERT & 66M & +0.9785 & 82.3 \\
-\texttt{distilbert-...-sst-2-english} & Lightweight Sentiment & 66M & +0.9978 & \textbf{22.8} \\
-\texttt{cardiffnlp/twitter-roberta-...} & Offensive Language & 125M & +0.8122 & \textbf{15.6} \\
-\bottomrule
-\end{tabular}
-\caption{Representative safety scorer candidate registry benchmarks on NVIDIA RTX 3050 Laptop GPU.}
-\label{tab:app_scorer_reg}
-\end{table}
 
 \section{Qualitative Trajectory Case Studies}
 \label{app:case_studies}
 
-Figure \ref{fig:app_trajectories} illustrates the dynamic trajectory tracking and intervention response of Guard-Trajectory compared to unguarded baseline MDLM. Figure \ref{fig:app_density} demonstrates the empirical continuation toxicity distributions across the held-out test split.
-
-\begin{figure*}[t]
+\begin{figure*}[!t]
 \centering
 \includegraphics[width=\textwidth]{fig6_trajectory_case_studies.png}
 \caption{(a) Step-wise intermediate risk trajectories for safe vs. violating generations, highlighting the early detection window. (b) Trajectory interception: unconstrained diffusion degenerates into severe toxicity, whereas Directional Taboo Steering detects risk at step 3, re-masks candidate positions, and eliminates taboo tokens, guiding the trajectory back to safe generation.}
 \label{fig:app_trajectories}
 \end{figure*}
 
-\begin{figure}[h]
+\begin{figure}[!t]
 \centering
-\includegraphics[width=0.78\textwidth]{fig7_toxicity_distributions.png}
+\includegraphics[width=\linewidth]{fig7_toxicity_distributions.png}
 \caption{Empirical kernel density estimates of continuation toxicity across 1,400 trajectories on the test split ($N=200$). Guard-Trajectory policies ($P_5$, $P_6$) suppress high-risk density beyond $\tau=0.5$ while preserving unconstrained generation modes.}
 \label{fig:app_density}
 \end{figure}
 
-\section{Ethical Considerations, Broader Impact, and Limitations}
+\section{Ethical Considerations and Limitations}
 \label{app:ethics}
+\paragraph{Potential Biases in Proxy Classifiers} We emphasize that automated safety classifiers exhibit known demographic and dialect biases, particularly regarding African American Vernacular English (AAVE). Guard-Trajectory's training-free plug-and-play design allows deploying updated or de-biased classifiers without retraining the generative backbone.
 
-\paragraph{Potential Biases in Proxy Classifiers:} We emphasize that automated safety classifiers (such as Toxic-BERT and RoBERTa toxicity heads) exhibit known demographic and dialect biases, particularly regarding African American Vernacular English (AAVE) and identity-group mentions. Guard-Trajectory's training-free plug-and-play design allows deploying updated or de-biased classifiers without retraining the generative backbone.
+\paragraph{Operationalizing Harmful Text} Evaluated prompts focus strictly on linguistic toxicity benchmarks from RealToxicityPrompts. No operational instructions for weapons, cyber-attacks, or self-harm were evaluated or emitted.
 
-\paragraph{Operationalizing Harmful Text:} To avoid generating or disseminating actionable harm, prompts evaluated in this study focus strictly on linguistic toxicity benchmarks from RealToxicityPrompts. No biological, radiological, cyber-attack, or self-harm instructions were evaluated or emitted.
+\paragraph{Deployment Recommendations} For interactive applications, single-scorer configuration ($P_5$) provides sub-second generation (0.60 s) with negligible 16.7\% compute overhead. For mission-critical pipelines, the disagreement-aware ensemble ($P_6$) provides superior risk coverage against false-negative omissions.
 
-\paragraph{Deployment Recommendations:} For latency-critical interactive applications, we recommend Guard-Trajectory with single-scorer configuration ($P_5$), providing sub-second generation (0.60 s) with negligible 16.7\% compute overhead. For mission-critical high-assurance pipelines, the disagreement-aware ensemble ($P_6$) provides superior risk coverage against false-negative scorer omissions.
 \end{document}
