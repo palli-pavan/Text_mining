@@ -102,11 +102,34 @@ def run_experiment_suite(
         "P6": AdaptiveEnsemblePolicy([primary_scorer, secondary_scorer or primary_scorer], base_threshold=0.5, persistence_min=2, check_interval=2, max_budget=5),
     }
 
+    # Each finished generation is appended immediately. A restarted run can
+    # resume from the saved JSONL without repeating completed prompt/seed/policy
+    # combinations or discarding a long local-GPU session after interruption.
+    jsonl_path = os.path.join(output_dir, f"experiment_runs_{split}.jsonl")
     raw_logs = []
     policy_results = {p: [] for p in policies}
+    completed = set()
+    valid_prompts = {p["prompt_id"]: p["prompt_text"] for p in prompts}
+    if os.path.exists(jsonl_path):
+        with open(jsonl_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                prior = json.loads(line)
+                key = (prior["prompt_id"], prior["seed"], prior["policy"])
+                if (prior["split"] != split or prior["policy"] not in policies
+                        or prior["seed"] not in seeds
+                        or valid_prompts.get(prior["prompt_id"]) != prior["prompt_text"]
+                        or key in completed):
+                    raise ValueError(f"Output file contains incompatible or duplicate record: {key}")
+                completed.add(key)
+                raw_logs.append(prior)
+                policy_results[prior["policy"]].append(prior)
+        print(f"Resuming from {len(completed)} completed runs in {jsonl_path}")
 
     total_runs = len(prompts) * len(seeds) * len(policies)
     pbar = tqdm(total=total_runs, desc="Evaluating paired policies")
+    pbar.update(len(completed))
 
     for p_info in prompts:
         prompt_id = p_info["prompt_id"]
@@ -115,6 +138,8 @@ def run_experiment_suite(
 
         for seed in seeds:
             for p_key in policies:
+                if (prompt_id, seed, p_key) in completed:
+                    continue
                 policy_obj = policy_map[p_key]
                 policy_obj.reset()
 
@@ -215,15 +240,12 @@ def run_experiment_suite(
 
                 raw_logs.append(record)
                 policy_results[p_key].append(record)
+                with open(jsonl_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(record) + "\n")
                 pbar.update(1)
 
     pbar.close()
 
-    # Save detailed JSONL logs
-    jsonl_path = os.path.join(output_dir, f"experiment_runs_{split}.jsonl")
-    with open(jsonl_path, "w", encoding="utf-8") as f:
-        for r in raw_logs:
-            f.write(json.dumps(r) + "\n")
     print(f"\nDetailed trajectory logs saved to {jsonl_path}")
 
     # 4. Compute Aggregate Metrics matching Section 13 Results Table Template
@@ -323,6 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=16, help="Reverse diffusion steps")
     parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
+    parser.add_argument("--manifest_path", type=str, default="data/manifests/prompt_manifest.csv")
     parser.add_argument("--output_dir", type=str, default="results")
     args = parser.parse_args()
 
@@ -332,5 +355,6 @@ if __name__ == "__main__":
         num_steps=args.steps,
         seq_len=args.seq_len,
         seeds=args.seeds,
+        manifest_path=args.manifest_path,
         output_dir=args.output_dir,
     )

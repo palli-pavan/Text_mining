@@ -1,0 +1,17 @@
+{
+  "device": "NVIDIA GeForce RTX 3050 Laptop GPU",
+  "warmup_pairs": 3,
+  "measured_pairs": 30,
+  "p0_mean_sec": 0.7941,
+  "p1_mean_sec": 0.8719,
+  "p1_filter_mean_sec": 0.0359,
+  "p0_median_sec": 0.7413,
+  "p1_median_sec": 0.8049,
+  "paired_mean_overhead_sec": 0.0778,
+  "paired_bootstrap_95_ci_overhead_sec": [
+    0.0202,
+    0.1369
+  ],
+  "p1_rejected": 7,
+  "peak_allocated_mb": 1364.4
+}
