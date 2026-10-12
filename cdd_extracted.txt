@@ -1,0 +1,1004 @@
+
+--- PAGE 1 ---
+Constrained Discrete Diffusion
+Michael Cardei∗
+University of Virginia
+ntr2rm@virginia.edu
+Jacob K. Christopher∗
+University of Virginia
+csk4sr@virginia.edu
+Thomas Hartvigsen
+University of Virginia
+hartvigsen@virginia.edu
+Bhavya Kailkhura
+Lawrence Livermore National Laboratory
+kailkhura1@llnl.gov
+Ferdinando Fioretto†
+University of Virginia
+fioretto@virginia.edu
+Abstract
+Discrete diffusion models are a class of generative models that construct sequences
+by progressively denoising samples from a categorical noise distribution. Beyond
+their rapidly growing ability to generate coherent natural language, these models
+present a new and important opportunity to enforce sequence-level constraints, a
+capability that current autoregressive models cannot natively provide. This pa-
+per capitalizes on this opportunity by introducingConstrained Discrete Diffusion
+(CDD), a novel integration of differentiable constraint optimization within the
+diffusion process to ensure adherence to constraints, logic rules, or safety require-
+ments for generated sequences. Unlike conventional text generators that often
+rely on post-hoc filtering or model retraining for controllable generation, CDD
+directly imposes constraints into the discrete diffusion sampling process, result-
+ing in a training-free and effective approach. Experiments in toxicity-controlled
+text generation, property-constrained molecule design, and instruction-constrained
+text completion demonstrate that CDD achieveszero constraint violationsin a
+diverse array of tasks while preserving fluency, novelty, and coherence, while
+outperforming autoregressive and existing discrete diffusion approaches.
+1 Introduction
+Language generation, alongside many scientific problems, admits a natural representation as the
+generation of a discrete sequence from a finite alphabet. Examples range from natural language
+to molecular SMILES strings and linearized chemical procedures [ 1–4]. While large language
+models (LLMs) and related sequence transformers have recently accelerated discovery by proposing
+candidate sequences with desirable attributes, their autoregressive sampling mechanism produces
+tokens sequentially, hindering the ability to provide a native mechanism to ensure constrained
+feasibility. When these constraints are not satisfied, the generated outputs may be unreliable and
+ineffective in real-world applications. For example, a single out-of-vocabulary atom in a SMILES
+string can render a synthesized compound meaningless or even dangerous; similarly an overlooked
+volume unit in an autonomous laboratory protocol can trigger unsafe reactions.
+To limit such risks, LLMs are often deployed with a variety of guardrails. These include soft alignment
+through reinforcement learning from human feedback (RLHF), rejection sampling, or heuristic post-
+processing [3, 5]. However, these methods do not offer provable compliance with logical formulas,
+stoichiometric rules, or regulatory thresholds. This is exacerbated by the autoregressive nature of
+∗Equal contribution.
+†Contact author.
+39th Conference on Neural Information Processing Systems (NeurIPS 2025).
+arXiv:2503.09790v3  [cs.CL]  10 Dec 2025
+--- PAGE 2 ---
+Figure 1: Comparison ofConstrained Discrete
+Diffusionand baseline models. CDD imposes
+constraints without sacrificing fluency or expres-
+siveness.
+common language models, which generate se-
+quences one token at a time, making it difficult
+to enforce constraints at the sequence level.
+In contrast, discrete diffusion models offer a
+compelling alternative generative mechanism
+[6–9]. They refine a fully corrupted sequence
+by iteratively denoising the entire sample, and
+have shown strong performance across a vari-
+ety of tasks, including text generation, molec-
+ular design, and program synthesis [ 4, 7, 10].
+Since each step exposes a global view of the
+sequence, it creates a natural opportunity to im-
+pose sequence-level structure. This work intro-
+ducesConstrained Discrete Diffusion(CDD),
+a framework that capitalizes on this property
+by coupling discrete diffusion with a differen-
+tiable projection operator. Given a corrupted
+sequence at a particular diffusion step, the pro-
+jection searches for a new candidate that stays
+close to the model’s current score distribution,
+preserves entropy-based diversity, and simultaneously satisfies all user-defined constraints before the
+next denoising update. Because the introduced projection acts only at sampling time, the method is
+training-freeand needs neither model retraining nor post hoc filtering. Its stochastic formulation also
+preserves the generative diversity, which is crucial for exploratory scientific design, as will be shown
+in the empirical analysis.
+Specifically, CDD is evaluated on three representative use cases illustrated in Figure 1: (i) toxicity
+mitigation with tunable thresholds for safe LLM deployment, (ii) property adherence for molecular
+sequence generation, and (iii) instruction-following tasks requiring precise symbolic constraints. The
+experimental results demonstratezero threshold violationsfor toxicity, up to a203.4 % increasein
+novel molecule generation with complete property adherence, and100% satisfactionfor instruction-
+following constraints.
+Contributions.This paper provides the following contributions:
+1. It introduces Constrained Discrete Diffusion (CDD), a novel framework that integrates discrete dif-
+fusion models with a differentiable projection operator, enforcing global sequence-level constraints
+directly within the diffusion sampling process.
+2. It formulates this projection operator by solving a Lagrangian dual program at each denoising
+step, making the constrained optimization tractable and effective for guiding sequence generation.
+3. Through five extensive experiments on three different domains, we demonstrate that CDD achieves
+state-of-the-art constraint adherence (zero violations across all settings) while preserving high
+sample quality in terms of fluency, novelty, and coherence.
+2 Related Work
+Recent efforts in controllable text generation have largely focused on constrained decoding, where
+the output is dynamically restricted to adhere to predetermined syntactic, semantic, or lexical rules.
+Approaches in this area modify the decoding process to prune the vocabulary, ensuring that only
+tokens compliant with a formal grammar are considered [11], or employ external modules to filter
+outputs when direct access to the model’s logits is limited [12]. Other methods have also adapted
+beam search to encourage the presence or absence of specific words [ 13, 14]. Although these
+techniques effectively guide the generation process, they depend on augmented sampling heuristics
+which encourage, but frequently fail to provide, satisfaction of even simple constraint sets [15]. To
+address this, other research has implemented mappings from natural language to formal logic allowing
+verification of factual and logical consistency [16–18] and enforcement of feasibility constraints with
+external modules [19, 20]. However, these approaches, while effective in their respective domains,
+often require additional, domain-specific components to ensure that the generated outputs are not
+only syntactically valid but also adhere to practical or logical requirements.
+2
+--- PAGE 3 ---
+Other controllable generation approaches rely on energy-based sampling procedures to impose
+constraints on the outputs. These methods typically define an energy function combining language
+model likelihood with constraint penalties and leverage algorithms such as Metropolis-Hastings
+to sample low-energy (i.e., high probability) sequences [ 21–23]. While such methods are highly
+effective for encouraging simple properties (e.g., style transfer), they inherit many of the theoretical
+and practical shortcomings of rejection sampling. In particular, hard constraints are typically enforced
+only probabilistically, making energy-based approaches less suitable for settings requiring strict
+constraint satisfaction, as is desirable for the tasks considered in this work.
+Finally, several gradient-based sampling frameworks have been proposed to impose constraints
+on token sequences [24]. Building on this approach, Amini et al. [25] improve generation quality
+via structured Hamiltonian Monte Carlo. However, these methods lack mechanisms for enforcing
+hard constraints, and are limited to soft attribute control. Other gradient-based control methods
+for autoregressive generation, such as PPLM [ 26], apply conditional steering during decoding to
+bias generations toward desired attributes; we compare against this methods directly, and show that
+while it can shift output distributions, it fails to reliably enforce structural or semantic constraints.
+Guided discrete diffusion methods have also been explored for protein design. For example, [ 27]
+applies gradient-based guidance to the denoiser’s hidden states during sampling to steer sequences
+toward desired property objectives. Compared to these gradient-based guidance methods, our method
+frames each denoising step as a constrained optimization and enforces feasibility via an augmented-
+Lagrangian projection, presenting different behavior and formal guarantees.
+3 Preliminaries: Discrete Diffusion Models
+While diffusion models were originally developed for continuous data, they have recently been
+extended to discrete domains such as text, enabling non-autoregressive generation [7, 9, 28, 29]. In
+contrast to autoregressive models which predict tokens one by one,discrete diffusionmethods generate
+entire sequences in parallel by first corrupting sequences through a forward noising process and then
+iteratively reconstructing them with a learned reverse process.This is a key enabler recognized by
+this work, which exploits this modus operandi to impose global constraints while simultaneously
+maintaining high fidelity.
+Let x0 = (x1
+0, . . . ,xL
+0 ) denote an input sequence of size L, where each token xi
+0 ∈ Vis represented
+as a one-hot vector over a vocabularyV of N distinct tokens. In discrete diffusion models, the forward
+process produces, at time t∈[0, T] , a sequence of values xt ∈ VL that parametrizes probability
+distributions for each token xi
+t in the sequence. We denote the corresponding sequence of predicted
+tokens by x⋆
+t = arg max(xt) where the arg max operator is applied to every member xi
+t of the
+sequencex t. The diffusion process specifies aforward transition, defined as:
+q(xt |x 0) = Cat
+ 
+xt;α tx0 + (1−α t)ν
+
+,(1)
+where αt is a schedule that decreases over time, Cat(·;p) is the categorical distribution over probabil-
+ity vector p∈∆ N , and ν is a fixed reference distribution that specifies the type of corruption applied
+to each token. For example, theMasked Diffusion Language Model(MDLM) [ 7] uses a one-hot
+vector corresponding to the [MASK] token for ν. In contrast,Uniform Diffusion Language Models
+(UDLM) [8], uses ν as the uniform distribution over the vocabulary. Conversely, this instantiation
+allows tokens to be re-perturbed in later time steps.
+In thereverse process, xT is initialized from ν (e.g., MDLM initializes the probability vectors
+as one-hots where the weight is fully concentrated on the [MASK] token). For each position i in
+the sequence, while xi
+t =ν , the denoiser parameterizes the transitions to clean data, x0, and the
+probability of xi
+t =ν is discounted as t→0 . Once xt ̸=ν , the probability vector transitions into a
+one-hot vector, concentrating all weight exclusively on the predicted token.
+pθ(xs |x t) =q(xs |x t,x 0 =x θ(xt, t)) =
+
+
+
+Cat
+ 
+xs;x t
+
+,ifx t ̸=ν,
+Cat
+
+xs; (1−αs)ν+(α s−αt)xθ (xt,t)
+1−αt
+
+,ifx t =ν.
+(2)
+Equation (2) formalizes this reverse process parameterization, where xθ(xt, t)denotes the trained
+denoiser and s is the subsequent timestep in the continuous time reverse process and 0≤s < t≤T .
+Despite different corruption kernels (absorbing [MASK] [7] vs. uniform [8]), both samplers expose
+the full token–probability tensorx t for all positions at every reverse step.
+3
+--- PAGE 4 ---
+<latexit sha1_base64="oDByiv2LwRcPRJ3XONq4GxYDpls=">AAACB3icbZDLSgMxFIbPeK31VnXpJlgEV2VGvC2LblxWsBdph5JJ0zY0mRmSM2IZ+gCu3eozuBO3PoaP4FuYtrPQtj8EPv7/HJL8QSyFQdf9dpaWV1bX1nMb+c2t7Z3dwt5+zUSJZrzKIhnpRkANlyLkVRQoeSPWnKpA8nowuBnn9UeujYjCexzG3Fe0F4quYBSt9ZC2AkWeRm1sF4puyZ2IzIOXQREyVdqFn1YnYoniITJJjWl6box+SjUKJvko30oMjykb0B5vWgyp4sZPJw8ekWPrdEg30vaESCbu342UKmOGKrCTimLfzGZjc2EWqEV2M8HulZ+KME6Qh2x6fzeRBCMyLoV0hOYM5dACZVrYLxDWp5oytNXlbTfebBPzUDsteRel87uzYvk6aykHh3AEJ+DBJZThFipQBQYKXuAV3pxn5935cD6no0tOtnMA/+R8/QILDZme</latexit>
+x t
+<latexit sha1_base64="0wP4zGTIjmhehhoUpp5WyrJZNL8=">AAACF3icbZC7TsMwGIWdcivlFmBgYLGokMpAlSBuYwULY5HoRWqiyHHd1qrtRLaDqKI8CDMrPAMbYmXkEXgL3DYDtD2SpaNz/l/W/4Uxo0o7zrdVWFpeWV0rrpc2Nre2d+zdvaaKEolJA0csku0QKcKoIA1NNSPtWBLEQ0Za4fB23LceiVQ0Eg96FBOfo76gPYqRNlFgH6QeRgzWs0rqhRw+ZUGqT93sJLDLTtWZCM4bNzdlkKse2D9eN8IJJ0JjhpTquE6s/RRJTTEjWclLFIkRHqI+6RgrECfKTycHZPDYJF3Yi6R5QsNJ+ncjRVypEQ/NJEd6oGa7cbiwC/miuJPo3rWfUhEnmgg8/b+XMKgjOIYEu1QSrNnIGIQlNSdAPEASYW1Qlgwbd5bEvGmeVd3L6sX9ebl2k1MqgkNwBCrABVegBu5AHTQABhl4Aa/gzXq23q0P63M6WrDynX3wT9bXL0GpnvY=</latexit>
+P (x t→ 1 )
+[Mask]
+stupid
+wrong [Mask]
+stupid
+wrong
+[Mask] … [Mask] … [Mask] [Mask] … stupid … [Mask] [Mask] … wrong … [Mask]
+[Mask]
+stupid
+wrong
+Diﬀusion
+Output
+Probability 
+Distribution
+…
+constrained projection
+<latexit sha1_base64="oDByiv2LwRcPRJ3XONq4GxYDpls=">AAACB3icbZDLSgMxFIbPeK31VnXpJlgEV2VGvC2LblxWsBdph5JJ0zY0mRmSM2IZ+gCu3eozuBO3PoaP4FuYtrPQtj8EPv7/HJL8QSyFQdf9dpaWV1bX1nMb+c2t7Z3dwt5+zUSJZrzKIhnpRkANlyLkVRQoeSPWnKpA8nowuBnn9UeujYjCexzG3Fe0F4quYBSt9ZC2AkWeRm1sF4puyZ2IzIOXQREyVdqFn1YnYoniITJJjWl6box+SjUKJvko30oMjykb0B5vWgyp4sZPJw8ekWPrdEg30vaESCbu342UKmOGKrCTimLfzGZjc2EWqEV2M8HulZ+KME6Qh2x6fzeRBCMyLoV0hOYM5dACZVrYLxDWp5oytNXlbTfebBPzUDsteRel87uzYvk6aykHh3AEJ+DBJZThFipQBQYKXuAV3pxn5935cD6no0tOtnMA/+R8/QILDZme</latexit>
+x t
+<latexit sha1_base64="oDByiv2LwRcPRJ3XONq4GxYDpls=">AAACB3icbZDLSgMxFIbPeK31VnXpJlgEV2VGvC2LblxWsBdph5JJ0zY0mRmSM2IZ+gCu3eozuBO3PoaP4FuYtrPQtj8EPv7/HJL8QSyFQdf9dpaWV1bX1nMb+c2t7Z3dwt5+zUSJZrzKIhnpRkANlyLkVRQoeSPWnKpA8nowuBnn9UeujYjCexzG3Fe0F4quYBSt9ZC2AkWeRm1sF4puyZ2IzIOXQREyVdqFn1YnYoniITJJjWl6box+SjUKJvko30oMjykb0B5vWgyp4sZPJw8ekWPrdEg30vaESCbu342UKmOGKrCTimLfzGZjc2EWqEV2M8HulZ+KME6Qh2x6fzeRBCMyLoV0hOYM5dACZVrYLxDWp5oytNXlbTfebBPzUDsteRel87uzYvk6aykHh3AEJ+DBJZThFipQBQYKXuAV3pxn5935cD6no0tOtnMA/+R8/QILDZme</latexit>
+x t‘ ‘
+Figure 2: Illustration of CDD’s projection step embedded throughout the sampling process.
+4 Constrained Discrete Diffusion (CDD)
+4.1 Projected diffusion sampling.
+We begin by introducing a perspective of the discrete diffusion reverse process that motivates our
+approach. Prior work has shown thatcontinuousscore-based diffusion sampling processes can
+be framed as an sequential optimization procedure [ 30]. Score-based parameterizations enable
+this framing as the model learns to predict the gradients of the data density function, xθ(xt, t)≈
+∇logq t(xt |x 0) through Score Matching, and these gradients can then be applied to optimize xt to
+the data distribution qt(xt). This is typically conducted through a Langevin dynamics algorithms
+[31], which is used either directly [32] or through predictor-corrector Euler-discretizations [33]. In
+both cases, a series ofMsteps of Langevin dynamics are taken for a fixed distributionq t(xt):
+x′
+t(ℓ)
+update(ℓ)
+← − − − − −xt(ℓ) +γ t∇xt(ℓ) logq t(xt(ℓ)|x0) +
+p
+2γtϵ(forℓ= 1. . . M),(3)
+where γt is the step size, ϵ is added noise, and logq t(xt) is the density function of thelearned
+distribution at time step t. Note that whileannealingis used to improve convergence, it is applied
+only after every M iterations. At that point, the sample is updated (xt(M) →x t−1(1)) and the model
+transitions to the next distribution, qt−1(xt−1 |x 0), however, the step size and the distribution
+qt(xt |x 0)remain stationary throughout theseMiterations.
+Discrete diffusion models can leverage a discrete generalization of the score function, referred to as
+theConcrete score, to approximate the gradient of the probability density function [7, 9, 34]. Concrete
+Score Matching provides an approach mirroring continuous Score Matching in that the estimated
+gradients of the probability density function are used to guide the sample to high density regions
+of the target distribution. While not always explicitly framed as Concrete Score Matching [9, 34],
+the denoiser often implicitly models the score function, as supported by theoretical results in [ 7]
+demonstrating its equivalence in simplified formulations (∇logq t(xt |x 0)≈ ⟨xθ(xt, t),y⟩ ∀y=
+1, . . . , N, in this case). This enables the use of Langevin-based samplers for discrete diffusion, as
+commonly employed, e.g., in [34].
+Effectively, under some regularity conditions, Langevin dynamics will converge towards a stationary
+point. As shown by Xu et al., Langevin dynamics acts as an “almost-minimizer” on the optimized
+function, which in this case will be the negative probability density function, converging within a
+fixed bound of the optimum. Hence, for each series of steps with a stationary density function, within
+this fixed bound, the sampling procedure can be framed as the optimization problem,
+minimize
+xt
+1X
+t=T
+−logq t(xt|x0)s.t.x t ∈C.(4)
+Here, Equation (4) extends the representation from an unconstrained optimization problem to a
+constrained version by introducing a constraint set C. However, while iteratively applying the
+denoiser enables sampling from the posterior distribution, it does not natively incorporate externally
+defined constraints, or even implicit ones, given the stochastic nature of the process. Previous work
+4
+--- PAGE 5 ---
+for continuous modalities has proposed enforcing xt ∈C by applying a Euclidean projection after
+each denoising step [30], which is natural for continuous modalities which fall in a real space, but this
+is misaligned when applied to discrete diffusion which operates over a probability simplex xt ∈∆ N .
+To address this, we introduce a projection operator that minimizes theKullback-Leibler (KL) diver-
+gencebetween the projected and original probability distributions, as opposed to a Euclidean distance
+metric. Given the model’s predicted probabilities, the projection is defined as:
+xs =x t(ℓ+1) =P C
+ 
+x′
+t(ℓ)
+ def
+= arg min
+y
+DKL
+
+x′
+t(ℓ)∥y
+
+s.t.arg max(y)∈C.(5)
+The integration of this projection operator ensures that xs is the “nearest sample” that falls within the
+feasible subdistribution according to a distance metric defined over probability distributions. This
+ensures the denoising trajectory remains within the allowable set whenC is convex, enabling effective
+navigation along its boundary or interior toward an optimal solution (illustrated in Figure 2). Next, we
+show how this projection operator can be formulated as a subproblem within the sampling procedure
+and efficiently solved using gradient-based methods. Moreover, while convergence guarantees are
+available for convex constraint sets, as discussed below, Section 5 demonstrates how this technique can
+effectively handles highly non-linear constraints, including toxicity mitigation, molecular generation,
+and instruction following, achieving zero violations across all cases.
+Importantly, while state transitions are imposed on the token probability distributions, constraint
+satisfaction is evaluated on thedecoded sequence. Indeed, the constraints are formulated such that the
+arg max of the projected sequence y (referred to as y⋆), must satisfy sentence level criteria y⋆ ∈C .3
+However, this use of a non-differentiable arg max operation also poses challenges to the resolution
+of the projection, which relies on gradient-based optimization.
+4.2 Differentiable projection.
+To address the non-differentiability of the arg max function, we apply a Gumbel-Softmax relaxation
+˜ϕ, which approximates discrete token probabilities with continuous values [36] as
+˜ϕ(xi
+t)(v) =
+exp
+
+logx i
+t(v)+ξv
+Tsample
+
+PN
+v′=1 exp
+
+logx i
+t(v′)+ξv′
+Tsample
+ ,(6)
+where xi
+t(v) is the probability of token v in the vocabulary, ξv is drawn from the Gumbel (0,1) 1
+distribution for token v, and Tsample >0 is the temperature parameter controlling the smoothness of
+the output. This enables gradient propagation during the projection step, while closely approximating
+the discretearg maxoperation.
+4.3 Augmented Lagrangian projection.
+Consider a generic constraint on a sequence x defined via a measurable property given by a function
+gi(x). For instance, gi(·) :R L×N →R + might evaluate sentence toxicity (see Section 5.1), count
+the number of words occurring in a string (see Section 5.3), or even serve as a black-box function
+computed by an external routine, as in our molecular sequence generation application (see Section
+5.2). To guide the projection operations, we require a measure of constraint violation that can later
+inform the parametrization of our projection update rule; for ease of presentation, we express the
+constraint in the form gi(x)< τi, where τi ≥0 represents an acceptable threshold that must not be
+exceeded. To quantify by how much a given sequence violates the constraint, we define
+∆gi( ˜ϕ(xt)) = max
+
+0, gi( ˜ϕ(xt))−τ i
+
+,
+where g= (g 1, . . . , gm) can be treated as series of functions corresponding to a series of thresholds
+τ= (τ 1, . . . , τm), and∆g= (∆g 1, . . . ,∆gm)is defined in analogously quantifyingmconstraints.
+In practice, ∆g is non-linear, and, thus, to implement Equation (5), we adopt an augmented La-
+grangian approach [37]. In augmented Lagrangian methods, the problem constraints are incorporated
+into the objective of a minimizer via Lagrange multipliers λ and a quadratic penalty term µ. Let x′
+t
+3We assume a greedy decoding scheme as is standard to current diffusion-based language models.
+5
+--- PAGE 6 ---
+be the probability distribution after the denoising step at diffusion time t. We introduce a projected
+distribution y, which is iteratively updated to reduce the constraint violations (measured by the score
+∆g) while remaining close (in KL-divergence) to x′
+t. Concretely the augmented Lagrangian dual
+function is defined as:
+LALM(y,x ′
+t;λ, µ) =DKL (x′
+t∥y) +
+mX
+i=1
+λi∆gi( ˜ϕ(y)) + µi
+2 ∆gi( ˜ϕ(y))2
+where λ= (λ 1, . . . , λm) is a non-negative Lagrange multiplier and µ= (µ 1, . . . , µm) is a non-
+negative quadratic penalty term. When using a Lagrangian function, the primal optimization problem
+becomes
+arg min
+y
+LALM(y,x ′
+t;λ, µ),
+and is a lower bound of the original projection operator (5) by weak duality [ 37]. To obtain the
+strongest Lagrangian relaxation of the projection, theLagrangian dualcan be used to find the best
+Lagrangian multipliersλand penalty termsµ, i.e.,
+arg max
+λ,µ
+
+arg min
+y
+ 
+LALM(y,x ′
+t;λ, µ)
+
+.(7)
+In practice, the Lagrangian dual is a strong approximation of the original problem (our projection
+into the constraint space).
+Algorithm 1:Augmented Lagrangian
+Init:λ, µ, η, α, δ;
+Input:probability distributionx ′
+t
+y←x ′
+t;
+while∆g(y ∗)> δdo
+forj←1tomax_inner_iterdo
+LKL ←D KL(x′
+t∥y)
+Lviol ← Pm
+i=1 λi∆gi( ˜ϕ(y)) +
+µi
+2 ∆gi( ˜ϕ(y))2
+LALM ← LKL +L viol
+y←y−η∇ yLALM
+λ←λ+µ∆g(y ∗)
+µ←min(αµ, µ max)
+xs ←y;
+Output:x s
+The optimization of (7) proceeds iteratively, fol-
+lowing a gradient-based update on y while dy-
+namically adjusting the Lagrange multiplier λ
+and penalty coefficient µ. Specifically, we per-
+form the following updates [38]:
+y←y−η∇ yLALM(y,x ′
+t;λ, µ)(8a)
+λ←λ+µ∆g(y ⋆),(8b)
+µ←min(αµ, µ max),(8c)
+where η is the gradient step size, α >1 is a
+scaling factor that progressively increasesµ over
+iterations, and µmax is an upper bound on the
+penalty term. These updates drive y as close as
+possible to satisfy ∆g( ˜ϕ(y⋆))≤τ while also
+ensuring it remains close to the original denoised
+distributionx ′
+t. Pseudocode is provided for our
+implementation in Algorithm 1.
+To assess the robustness of this projection formulation, we performed an ablation study (Appendix C)
+examining the sensitivity of the Lagrangian hyper-parameters. Across the full grid of settings,the
+Lagrangian relaxation converges to feasible solutions in all our test cases.
+As shown in the next section, there is a high degree of flexibility in how these constraints can be
+implemented. For instance, they can be implemented as surrogate models (e.g., a classifier) that can
+be used to provide a continuous score, allowing for smooth gradient-base updates, as shown above.
+4.4 Theoretical justification.
+The next result shows that the constrained reverse diffusion process converges to samples within the
+feasible region C while also keeping their distribution close to the data manifold, thus ensuring that
+the generated samples are both valid and realistic. Let DKL(xt,C) = inf y∈C DKL(y∥xt) denote
+the KL divergence fromx t to the setC.
+Theorem 4.1(Convergence of CDD).Let C be non-empty and β-prox-regular in the sense of [39,
+Def. 13.27], and the score network satisfy ∥∇xt logq t(xt)∥ ≤G(a standard consequence of the
+bounded-data domain after normalization). Then, for positive step sizes γt,≤ 1
+2G2 β, the following
+inequality holds for the distance to the feasible setC:
+DKL(x′
+s,C)≤(1−α t)D KL(x′
+t,C) +α 2
+t+1G2,(non-asymptotic feasibility)
+whereα t is proportional to the discrete Langevin step sizeγ t andGbounds the score norm.
+6
+--- PAGE 7 ---
+Toxicity
+Model Size PPL LLM-JudgeCoherence Viol (%)
+Mean MedianCoherenceChange (%)τ= 0.25τ= 0.50τ= 0.75
+GPT2 124M 18.78 17.96 42.68 – 33.2 21.6 13.1
+GPT2PPLM 124M46.40 34.05 18.88 -55.8 16.1 8.4 4.0
+GPT2FUDGEλ=2 124M26.46 18.79 41.79 -2.1 31.5 19.7 12.7
+GPT2FUDGEλ=9 124M81.84 19.22 38.90 -8.9 30.6 19.6 11.7
+Llama 3.2 1B 15.66 14.58 57.10 – 34.9 27.8 23.1
+MDLM 110M 46.72 39.75 20.02 – 32.1 23.2 17.2
+CDDτ=0.25(Ours)110M61.55 45.42 20.16 +0.7 0.0 0.0 0.0
+CDDτ=0.50(Ours)110M59.44 44.24 20.30 +1.4 –0.0 0.0
+CDDτ=0.75(Ours)110M54.87 43.51 20.88 +4.3 – –0.0
+Figure 3: Results across different toxicity thresholds, PPL percentiles, LLM-Judge coherence, and
+coherence degradation levels. PPL is evaluated with GPT-2-XL, and coherence metrics are assessed
+by the LLM-Judge.Boldand underlined values denote the best and second-best, respectively.
+Theorem 4.1 shows that the distance to the feasible set C decreases at a rate of 1−α t at each step
+(up to an additive α2
+t G2 noise). This implies ε-feasibility after O(α−1
+min) steps, with αmin ∝min t γt,
+and a cumulative KL drift withinO(P
+t αt). The theorem assumes β-prox-regularity, which provides
+a relaxation of typical convexity assumptions, and implies that for each viable point and normal
+direction, small perturbations still project uniquely and smoothly back to C. Theorem proofs are
+provided in Appendix F.
+5 Experiments
+To empirically demonstrate the advantage provided by CDD, we compare our method against
+similarly sized autoregressive and diffusion-based language models. Specifically, we benchmark our
+performance on constrained text generation against autoregressive baselines: GPT-2 and Llama 3.2
+[40, 41], and discrete diffusion baselines MDLM and UDLM [7, 8]. We intentionally select models
+of similar size to, and up to one magnitude larger than, our base discrete diffusion model, noting that
+we expect the performance of both classes of models to scale similarly with size. As demonstrated
+by Schiff et al. [8], MDLM outperforms UDLM on the natural language tasks discussed in Sections
+5.1 and 5.3. Consequently, we compare to both models in Section 5.2 and solely MDLM for the
+following natural language tasks. We use UDLM as the base discrete diffusion model for Section 5.2,
+and MDLM in Sections 5.1 and 5.3. For each application, CDD uses configurations as described in
+[7, 8] unless otherwise specified. Additional experiment details are available in Appendix B.
+5.1 Natural Language Toxicity Mitigation
+While LLMs have demonstrated remarkable capabilities in generating human like text, a byproduct
+of data driven generation is the inadvertent creation of harmful, offensive and dangerous text. Despite
+undergoing alignment finetuning, current state-of-the-art models still frequently generate harmful
+outputs. While post-processing methods can be effective in moderating generations, they can be
+circumvented by adversarial or malicious prompts, resulting in toxic output generation. In this
+experiment, we generate outputs conditioned on prompts from the RealToxicityPrompts dataset [42].
+We select prefixes with toxicity score above 0.5, testing how these models perform on toxic inputs,
+and perplexity below 30.0, avoiding incoherent generations. To model the constraints, GPT-Neo
+[43] is finetuned on the Jigsaw Toxic Comment Classification Challenge 4. We evaluate on 1,000
+samples, and discuss ALM hyper-parameters in Appendix C, runtime in Appendix D, and diversity
+as measured by entropy [10] in Appendix E.
+Figure 3 presents a comprehensive evaluation on model performance for toxicity mitigation, where the
+objective is to have the generated output satisfy some toxicity threshold, based on a surrogate model,
+while maintaining competitive perplexity and coherence. We report perplexity (PPL), coherence
+as determined by a LLM judge, and violation rates at toxicity thresholds τ= 0.25 , τ= 0.50 , and
+τ= 0.75across different model architecures and baselines.
+4https://www.kaggle.com/c/jigsaw-toxic-comment- classification-challenge
+7
+--- PAGE 8 ---
+Among the baselines, GPT2 (124M) and Llama (1B) achieve the lowest perplexity and highest
+coherence score, however, they frequently produce toxicity content resulting in high violations.
+Although PPLM and FUDGE (124M) [ 15, 26] are able to decrease the violations for all toxicity
+thresholds, they are unable to consistently prevent toxic generations while suffering from an increase
+in perplexity and a decrease in coherence. MDLM (110M) exhibits higher perplexity than GPT2
+and lower coherence, and similarly shares a non-negligible amount of toxicity constraint violations.
+In contrast, CDD providesperfect constraint satisfactionat each toxicity thresholds, maintaining
+comparable perplexity scores to its base diffusion language model and other baselines. Additionally,
+while constraint imposition degrades the coherence of the controllable generation baselines, CDD
+observes an increase in coherence as evaluated by the LLM-Judge.These findings are important as
+they show how, using projection-based control strategies, it is possible to achieve complete toxicity
+constraint satisfaction at desired thresholds.
+5.2 Molecular Generation
+Next, we show the ability of CDD to impose constraints on a scientific task, specifically in the domain
+of molecular generation. In this experiment we generate SMILES strings [44], a linear representation
+of a molecule’s structure with a vocabulary consisting of a limited vocabulary of forty symbols and
+a grammar dictating molecular validity. Recent advances in generative modeling have enabled the
+design of molecular sequences by leveraging techniques from natural language processing. Despite
+their impressive ability to optimize for specific chemical properties, these models often generate
+molecules that fall short of practical requirements, either by producing compounds that are difficult to
+synthesize or by closely mimicking existing structures. Furthermore, generated molecules often fail
+to maximize qualitative properties such as drug-likeness (QED) [45] that are critical to the practicality
+of the generations and used as a qualitative metric for the experiments discussed in this section.
+To address this challenge, our framework incorporates two distinct constraint mechanisms:(1)
+synthetic feasibility, which ensures that generated molecules can be synthesized in a laboratory
+setting [46], and(2)novelty, which guarantees that the generated molecules are not already present in
+training datasets. For each constraint, we implement a dedicated projection operator, described in B,
+that imposes hard limits on the generation process, resulting in final outputs that adhere precisely to
+our desired standards of synthetic accessibility or novelty.
+Synthetic accessibility constraints.Synthetic accessibility is commonly assessed using black-box,
+non-differentiable functions. To enable gradient-based optimization, we train a surrogate model
+on the QM9 dataset [ 47], where training labels are derived from RDKit’s synthetic accessibility
+score [48]. This allows us to approximate a differentiable function g(·) for synthetic accessibility.
+While our molecular generation framework employs this surrogate model to optimize for synthetic
+accessibility during training, the actual assessment of accessibility violations is conducted by a
+separate, black-box external model. This external evaluation rigorously measures the degree to which
+generated molecules comply with the synthetic accessibility criteria, using a series of thresholds
+(τ= 3.0 , 3.5, 4.0, and 4.5). For the discrete diffusion baselines, we adapt the guidance mechanisms
+provided by [8] for QED by retraining on synthetic accessibility labels for Classifier-Based Guidance
+(CBG) and Classifier-Free Guidance (CFG). A similar adaptation is applied for the autoregressive
+baselines employing FUDGE guidance [15]. The results, summarized in Figure 4 (left), confirm that
+CDD achieves perfect compliance across all thresholds. This 0% violation rate is achieved, all while
+generating a competitive number of valid molecules and exhibiting the highest drug-likeness scores.
+Novelty constraints.Novelty in molecule generation refers to the model’s ability to produce new
+chemical structures that were not explicitly contained in its training set. In the context of generative
+modeling for drug design or other chemistry applications, novelty is often an important objective for
+the reasons of chemical space exploration and practical relevance. In this experiment, we generate
+SMILES strings constraining all valid generations to be novel. The novelty constraint is enforced
+at every denoising step. If the current candidate sequence already exists in an external database,
+a projection operator minimally perturbs its token-probability vector to yield an unseen molecule,
+thereby approximating a gradient step through the otherwise non-differentiable novelty indicator.
+Specifically, the novelty projection operator is a best-first traversal of the token-probability space:
+each token flip incurs a cost equal to its probability gap from the argmax, a priority queue retrieves
+the lowest-cost unseen sequence, and we then renormalize and cache it to prevent duplication. As it
+selects the sequence with the minimal cumulative flip cost, our distance metric over sequences, the
+8
+--- PAGE 9 ---
+Molecules (Synthetic Accessibility)
+Model Valid Novel QED Viol (%)τ= 3.0τ= 3.5τ= 4.0τ= 4.5AR 1023 0 0.46 91.6 78.4 62.3 42.0ARFUDGEγ=7 925 6 0.48 11.1 9.8 9.6 9.2MDLM 596 20 0.45 85.9 73.7 61.1 44.0MDLMD-CFGγ=3772 3 0.41 87.8 73.9 54.2 22.5MDLMD-CBGγ=3436 14 0.37 50.5 48.6 46.1 44.7UDLM 895 21 0.47 89.4 88.0 58.1 37.8UDLMD-CFGγ=5 850 18 0.47 80.6 58.6 35.9 13.9UDLMD-CBGγ=10896 28 0.47 90.1 77.8 58.6 37.7CDDτ=3.0(Ours)35336 0.63 0.0 0.0 0.0 0.0CDDτ=3.5(Ours)863 22 0.62 –0.0 0.0 0.0CDDτ=4.0(Ours)936 31 0.61 – –0.0 0.0CDDτ=4.5(Ours)938 33 0.58 – – –0.0
+Molecules (Novelty)Model Size Valid & Novel QEDViol (%)No GuidanceAR 92M 11 0.41 98.93MDLM 92M 271 0.45 54.53UDLM 92M 345 0.46 61.45CDD (Ours)92M 5110.45 0.00CFGARD-CFGγ= 3† 92M 79 0.60 91.61MDLMD-CFGγ= 3† 92M 96 0.60 69.82UDLMD-CFGγ= 5† 92M 640.62 93.69CDDD-CFGγ= 5(Ours)92M 2510.60 0.00CBGARFUDGEγ= 7† 92M 530.61 94.28MDLMD-CBGγ= 3† 92M 117 0.58 72.08UDLMD-CBGγ= 10† 92M 640.61 93.59CDDD-CBGγ= 10(Ours)92M 3550.59 0.00
+Figure 4:Left:Results for synthetic accessibility constrained molecule generation constraints. QED
+and constraint violations are reported for only valid molecules, and novel molecules must be valid and
+have no violation (τ≤3.0 ).Right:Results for novelty projection with and without QED guidance.
+Violation represents percentage of valid, but not novel molecule generations. QED is reported for
+only novel molecules. Results denoted with † are as reported by Schiff et al. [8].Boldand underlined
+values mark the best and second-best, respectively.
+procedure is mathematically equivalent to projecting the distribution onto the set of novel sequences.
+Repeating this operation throughout the diffusion trajectory guarantees that only new compounds are
+emitted while preserving the exploratory capacity of the discrete diffusion model.
+We compare against baselines with no QED guidance alongside CFG and CBG QED guidance [8]
+to evaluate the impact of our novelty constraint. The results are shown in the right side of Figure 4.
+Notice how the CBG setting yields a 203.4% increase in novel molecule generation, while the CFG
+setting shows a 161.4% increase. Even without guidance, the method still produces 48.1% more
+novel molecules, with only a minimal reduction in the QED score.These results are significant
+because they demonstrate that CDD can effectively generate novel molecules while maintaining a
+high QED score, which is crucial for many scientific tasks.
+5.3 Instruction Following
+Model Size PPL LLM–JudgeViol (%)
+Counting
+GPT-2 (zero-shot) 124M19.2 ± 0.8 57.8 100
+GPT-2 (instruction-tuned) 124M23.4 ± 1.3 70.9 5.0
+Llama 3.2 (zero-shot) 1B34.3 ± 3.8 79.5 100
+Llama 3.2 (instruction-tuned) 1B30.7 ± 2.9 91.8 9.1
+MDLM 169M 16.9 ± 1.0 61.2 54.5
+CDD (Ours)169M 17.9 ± 1.1 60.4 0.0
+Lexical
+GPT-2 (zero-shot) 124M26.6 ± 4.2 28.1 97.6
+GPT-2 (instruction-tuned) 124M62.2 ± 2.9 15.4 96.4
+Llama 3.2 (zero-shot) 1B11.3 ± 2.0 30.7 97.2
+Llama 3.2 (instruction-tuned) 1B66.5 ± 6.1 22.9 93.6
+MDLM 169M 21.9 ± 2.0 34.8 97.5
+CDD (Ours)169M 26.6 ± 4.1 65.1 0.0
+Table 1: PPL is assessed using GPT2.Boldand
+underlined mark the best and second-best, respectively.
+Finally, the last application focuses on satis-
+fying user-specified symbolic constraints, a
+task that many autoregressive models strug-
+gle with. We evaluate CDD against such
+models using two types of constraints. First,
+we assess the ability of the tested mod-
+els to accurately answer how many letters
+are in a word, such as ‘How many R’s
+are inStrawberry?’. We additionally test
+lexical constraints based of the COLLIE
+dataset [49], prompting the models to gen-
+erate word-indexed constrained sentences,
+such as ‘Generate a sentence where the third-
+to-last word ismankind’. For each con-
+straint, the projection operator to imposes
+hard constraintson the generation, pushing
+the samples back onto the constraint set.
+Counting constraints.As illustrated in the top of Table 1, unconstrained GPT-2 and Llama 3.2 fail
+to satisfy any letter-count requirement. Instruction tuning helps, reducing violation rates to 5.0%
+(GPT-2) and 9.1% (Llama 3.2), but still leaves a notable error margin. Alternatively, MDLM achieves
+the lowest perplexity and second-best coherence, but over half of its outputs violate the constraint.
+By contrast,CDD fully eliminates violationswhile preserving near-best fluency (17.9 perplexity),
+demonstrating its provision of strict compliance without sacrificing language quality.
+9
+--- PAGE 10 ---
+Lexical constraints.The results for lexical constraints are shown in the bottom of Table 1. The
+zero-shot and instruction-tuned versions of GPT-2 and Llama 3.2 show similarly high violation rates
+(about 97%), and instruction tuning only minimally improves these figures. MDLM again delivers
+relatively high fluency (21.9 perplexity, 34.8 coherence) but fails to address the precise positional
+requirements (97.5% violations). In stark contrast,CDD ensures perfect adherenceand the best
+LLM-as-a-Judge score (65.1 coherence), with only a moderate increase in perplexity, thus confirming
+the effectiveness of its projection mechanism for enforcing hard lexical constraints.Taken together,
+these experiments reveal a fundamental limitation of conventional and instruction-tuned language
+models in scenarios requiring strict constraints. Conversely, discrete diffusion models, when equipped
+with constraints, can effectively produces outputs that satisfy both counting and lexical requirements,
+opening new avenues for applications in controlled text generation.
+We include more evaluation and experiments in the Appendix. Specifically, Appendix B details the
+experimental setup, Appendix C evaluates CDD’s robustness through an extensive hyper-parameter
+ablation, and Appendix D reports runtime comparisons with the baselines.
+6 Limitations
+There are two key limitations that are currently faced in the development of constrained discrete
+models. The first regards the size of currently available discrete diffusion models. While current
+discrete diffusion models provide comparable performance in fluency and perplexity to similarly
+sized autoregressive models, including state-of-the-art models such as Llama 3.2 1B, their generative
+capabilities fall short of large-scale language models. Larger scale, closed-source discrete diffusion
+models have been developed and boasted impressive performance [29], but larger open-source models
+are yet to be provided to the research community. It is expected that the release of such larger models
+will further boost the performance of our proposed methods.
+The second key limitation concerns an inherent byproduct of constraint imposition: increased
+computational overhead. While unconstrained discrete diffusion language models have been shown
+to provide significant speed-ups over autoregressive language models due to the parallelization of
+token generation [ 7, 9, 50], the inclusion of constraints within the generation process may limit
+this benefit. Nevertheless, this trade-off is often justified, as imposing constraints is essential in
+scenarios where correctness outweighs generation speed, such as ensuring safety-critical outputs or
+supporting rigorous scientific exploration. In such contexts, achieving accurate and reliable outcomes
+is prioritized over computational efficiency.
+7 Conclusion
+In this paper we presented Constrained Discrete Diffusion (CDD), a novel method for imposing both
+structured and unstructured constraints during sequence generation. CDD relies on the adoption
+of discrete diffusion models which enable the consideration of entire sequences when imposing
+constraints during the generation process. Offering a key departure from current paradigms for
+controllable text generation, CDD integrates differentiable optimization methods into the diffusion
+reverse process. This integration, governed by a rigorous mathematical optimization framework,
+provides precise control for discrete sequence generation. The method is empirically validated on (i)
+toxicity mitigation and harmful content prevention, (ii) generation of novel molecular sequences that
+adhere to specific properties for drug discovery, and (iii) imposition of lexical constraints at character
+and sequence levels, reporting state-of-the-art results for controllable generation in both terms of
+constraint adherence and quality metrics.
+10
+--- PAGE 11 ---
+Acknowledgments
+This material is based upon work supported by the National Science Foundation Graduate Research
+Fellowship Program under Grant No 2234693. Any opinions, findings, and conclusions or recom-
+mendations expressed in this material are those of the authors and do not necessarily reflect the views
+of the National Science Foundation. This work was partially supported by NSF grants CAREER-
+2401285, RI-2533631, RI-2334936, DARPA under Contract No. #HR0011252E005, and UV A’s
+National Security Data & Policy Institute, ODNI Contracting Activity #2024-24070100001 The work
+has also been supported by LLNL under Contract DE-AC52- 07NA27344 and by the LLNL-LDRD
+Program under Project No. 24-ERD-010 and 24-SI-008. This manuscript has been co-authored by
+Lawrence Livermore National Security, LLC under Contract No. DE-AC52-07NA27344 with the
+U.S. Department of Energy. Any opinions, findings, and conclusions or recommendations expressed
+in this material are those of the authors and do not necessarily reflect the views of the NSF, DOE,
+DARPA, or DOD.
+References
+[1] Manling Li, Shiyu Zhao, Qineng Wang, Kangrui Wang, Yu Zhou, Sanjana Srivastava, Cem
+Gokmen, Tony Lee, Li Erran Li, Ruohan Zhang, et al. Embodied agent interface: Benchmarking
+llms for embodied decision making.arXiv preprint arXiv:2410.07166, 2024.
+[2] Jingru Jia, Zehua Yuan, Junhao Pan, Paul E McNamara, and Deming Chen. Decision-making be-
+havior evaluation framework for llms under uncertain context.arXiv preprint arXiv:2406.05972,
+2024.
+[3] Yuexiang Zhai, Hao Bai, Zipeng Lin, Jiayi Pan, Shengbang Tong, Yifei Zhou, Alane Suhr,
+Saining Xie, Yann LeCun, Yi Ma, et al. Fine-tuning large vision-language models as decision-
+making agents via reinforcement learning.arXiv preprint arXiv:2405.10292, 2024.
+[4] Jiacheng Ye, Jiahui Gao, Shansan Gong, Lin Zheng, Xin Jiang, Zhenguo Li, and Lingpeng
+Kong. Beyond autoregression: Discrete diffusion for complex reasoning and planning.arXiv
+preprint arXiv:2410.14157, 2024.
+[5] Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela Mishkin,
+Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language models to
+follow instructions with human feedback.Advances in neural information processing systems,
+35:27730–27744, 2022.
+[6] Jacob Austin, Daniel D. Johnson, Jonathan Ho, Daniel Tarlow, and Rianne van den Berg.
+Structured denoising diffusion models in discrete state-spaces, 2023. URL https://arxiv.
+org/abs/2107.03006.
+[7] Subham Sekhar Sahoo, Marianne Arriola, Yair Schiff, Aaron Gokaslan, Edgar Marroquin,
+Justin T Chiu, Alexander Rush, and V olodymyr Kuleshov. Simple and effective masked
+diffusion language models.arXiv preprint arXiv:2406.07524, 2024.
+[8] Yair Schiff, Subham Sekhar Sahoo, Hao Phung, Guanghan Wang, Sam Boshar, Hugo Dalla-
+torre, Bernardo P de Almeida, Alexander Rush, Thomas Pierrot, and V olodymyr Kuleshov.
+Simple guidance mechanisms for discrete diffusion models.arXiv preprint arXiv:2412.10193,
+2024.
+[9] Aaron Lou, Chenlin Meng, and Stefano Ermon. Discrete diffusion modeling by estimating the
+ratios of the data distribution. InForty-first International Conference on Machine Learning,
+2024.
+[10] Kaiwen Zheng, Yongxin Chen, Hanzi Mao, Ming-Yu Liu, Jun Zhu, and Qinsheng Zhang.
+Masked diffusion models are secretly time-agnostic masked models and exploit inaccurate
+categorical sampling.arXiv preprint arXiv:2409.02908, 2024.
+[11] Saibo Geng, Martin Josifoski, Maxime Peyrard, and Robert West. Grammar-constrained
+decoding for structured NLP tasks without finetuning. In Houda Bouamor, Juan Pino, and Kalika
+Bali, editors,Proceedings of the 2023 Conference on Empirical Methods in Natural Language
+11
+--- PAGE 12 ---
+Processing, pages 10932–10952, Singapore, December 2023. Association for Computational
+Linguistics. doi: 10.18653/v1/2023.emnlp-main.674. URL https://aclanthology.org/
+2023.emnlp-main.674.
+[12] Saibo Geng, Berkay Döner, Chris Wendler, Martin Josifoski, and Robert West. Sketch-guided
+constrained decoding for boosting blackbox large language models without logit access.arXiv
+preprint arXiv:2401.09967, 2024.
+[13] Ximing Lu, Peter West, Rowan Zellers, Ronan Le Bras, Chandra Bhagavatula, and Yejin Choi.
+Neurologic decoding:(un) supervised neural text generation with predicate logic constraints.
+arXiv preprint arXiv:2010.12884, 2020.
+[14] Ximing Lu, Sean Welleck, Peter West, Liwei Jiang, Jungo Kasai, Daniel Khashabi, Ronan Le
+Bras, Lianhui Qin, Youngjae Yu, Rowan Zellers, et al. Neurologic a* esque decoding: Con-
+strained text generation with lookahead heuristics.arXiv preprint arXiv:2112.08726, 2021.
+[15] Kevin Yang and Dan Klein. Fudge: Controlled text generation with future discriminators. In
+Proceedings of the 2021 Conference of the North American Chapter of the Association for
+Computational Linguistics: Human Language Technologies. Association for Computational
+Linguistics, 2021. doi: 10.18653/v1/2021.naacl-main.276. URL http://dx.doi.org/10.
+18653/v1/2021.naacl-main.276.
+[16] Nakul Gopalan, Dilip Arumugam, Lawson LS Wong, and Stefanie Tellex. Sequence-to-sequence
+language grounding of non-markovian task specifications. InRobotics: Science and Systems,
+volume 2018, 2018.
+[17] Jason Xinyu Liu, Ziyi Yang, Ifrah Idrees, Sam Liang, Benjamin Schornstein, Stefanie Tellex,
+and Ankit Shah. Grounding complex natural language commands for temporal tasks in unseen
+environments. InConference on Robot Learning, pages 1084–1110. PMLR, 2023.
+[18] Hanmeng Liu, Zhiyang Teng, Chaoli Zhang, and Yue Zhang. Logic agent: Enhancing validity
+with logic rule invocation.arXiv preprint arXiv:2404.18130, 2024.
+[19] Yongchao Chen, Jacob Arkin, Yang Zhang, Nicholas Roy, and Chuchu Fan. Autotamp: Au-
+toregressive task and motion planning with llms as translators and checkers.arXiv preprint
+arXiv:2306.06531, 2023.
+[20] Kevin Lin, Christopher Agia, Toki Migimatsu, Marco Pavone, and Jeannette Bohg. Text2motion:
+From natural language instructions to feasible plans.Autonomous Robots, 47(8):1345–1365,
+2023.
+[21] Ning Miao, Hao Zhou, Lili Mou, Rui Yan, and Lei Li. Cgmh: Constrained sentence gener-
+ation by metropolis-hastings sampling. InProceedings of the AAAI Conference on Artificial
+Intelligence, volume 33, pages 6834–6842, 2019.
+[22] Jarad Forristal, Niloofar Mireshghallah, Greg Durrett, and Taylor Berg-Kirkpatrick. A block
+metropolis-hastings sampler for controllable energy-based text generation.arXiv preprint
+arXiv:2312.04510, 2023.
+[23] Daniel Gareev, Thomas Hofmann, Ezhilmathi Krishnasamy, and Tiago Pimentel. Local and
+global decoding in text generation.arXiv preprint arXiv:2410.10810, 2024.
+[24] Sachin Kumar, Biswajit Paria, and Yulia Tsvetkov. Gradient-based constrained sampling from
+language models.arXiv preprint arXiv:2205.12558, 2022.
+[25] Afra Amini, Li Du, and Ryan Cotterell. Structured voronoi sampling.Advances in Neural
+Information Processing Systems, 36:31689–31716, 2023.
+[26] Sumanth Dathathri, Andrea Madotto, Janice Lan, Jane Hung, Eric Frank, Piero Molino, Jason
+Yosinski, and Rosanne Liu. Plug and play language models: A simple approach to controlled
+text generation.arXiv preprint arXiv:1912.02164, 2019.
+[27] Nate Gruver, Samuel Stanton, Nathan C. Frey, Tim G. J. Rudner, Isidro Hotzel, Julien Lafrance-
+Vanasse, Arvind Rajpal, Kyunghyun Cho, and Andrew Gordon Wilson. Protein design with
+guided discrete diffusion, 2023. URLhttps://arxiv.org/abs/2305.20009.
+12
+--- PAGE 17 ---
+A Expanded Related Work
+Constrained Decoding Algorithms.A prominent strategy in controllable text generation is to
+employ constrained decoding algorithms, which incrementally parse outputs under specified for-
+matting or structure requirements. Such approaches have been extensively used in tasks like code
+generation [51], semantic parsing [52], SQL queries [53], and grammar-constrained text generation
+[11]. These methods typically prune the vocabulary at each decoding step to only those tokens that
+comply with the target representation’s syntax or semantics. For instance, Geng et al. confine the
+logit distribution to tokens valid within a formal grammar, then employ acompletion engineto extend
+partial sequences while maintaining grammatical consistency. Meanwhile, approaches that treat the
+original language model as a black box resort to external constraints. For example, [12] harnesses a
+secondary model to parse and restrict outputs, an option that becomes necessary when direct access
+to the logits is unavailable. However, these workarounds may suffer performance penalties due to
+their indirect control over the primary model’s probability distribution.
+Beyond syntax-focused constraints, lexical constraints have also been extensively studied. Lu et al.
+[13] devise Neurologic decoding, which encourages the presence or absence of specific words in
+generated text via a modified beam search. They later improve adherence to these constraints by
+employing an A* search variant [14]. Similar frameworks combine toxicity classifiers with beam
+search to steer generation toward more benign text [26, 54]. Although these methods can effectively
+address a range of constraints, they generally rely on augmented sampling heuristics or additional
+classifiers rather than natively integrating constraints into the generation process.
+Natural Language Verification with Formal Logic.Another line of work has examined mapping
+natural language into logical representations to ensure factual and logical consistency [16–18]. By
+encoding linguistic inputs in a formal system, these methods can detect inconsistencies or factual
+errors and thereby provide a measure of control over generated outputs. For instance, Olausson et al.,
+Jiang et al., and Zhang et al. convert natural language statements into first-order logic (FOL) and
+leverage theorem proving to verify factual correctness. However, FOL struggles to capture complex
+temporal or sequential dependencies, limiting its applicability to planning or process-oriented tasks.
+Similarly, other work uses entailment models to verify that a conclusion logically follows from a set
+of premises [58], though these methods generally stop short of actively generating text that satisfies
+domain-specific constraints.
+Agent Constraint Satisfaction.In robotics and embodied AI, natural language planning frequently
+incorporates specialized external modules to handle feasibility constraints. For example, Chen et al.
+[19] and Lin et al. [20] defer to domain-specific motion planners to generate viable trajectories,
+embedding constraint satisfaction directly into the underlying optimization routines. Although these
+solutions can integrate strong, domain-aware constraints, they do so by delegating control to highly
+specialized components. On the discrete side, Yang et al. [59] achieves constraint satisfaction by
+running a validation module at each step of plan construction and discarding infeasible actions through
+rejection sampling. While effective in certain settings, such methods typically require domain-specific
+expertise and do not uniformly integrate constraint enforcement into the generative model itself.
+B Experimental Setup
+B.1 Toxicity Mitigation
+LLM-as-a-Judge Setup.To quantify thefluencyandcoherenceof generated continuations we
+follow the increasingly adopted LLM-as-a-Judge evaluation. This method has been shown to result in
+similar evaluation as human judgment [60]. Specifically, each post-prefix sentence is scored by the
+instruction-tunedGEMMA-3-27B-ITmodel and issued the following prompt:
+“You are a language expert evaluating the fluency and coherence of the following AI-
+generated sentence. . . Give a single integer score between 0 (poor) and 100 (excellent), with
+no explanation or comments. ”
+The model returns a single scalar s∈[0,100] for each sentence. Using an LLM evaluator offers two
+key advantages: (i) strong correlation with human judgments at negligible annotation cost, and (ii)
+scalability for thousands of evaluations performed in various experiments.
+17
+--- PAGE 20 ---
+FUDGE Implementation.For this application, we similarly follow the FUDGE implementation
+and configuration in [8] for QED guidance.
+Diffusion Guidance Implementation.We use classifier based guidance and classifier free guidance
+for QED as implemented in [8].
+B.3 Instruction Following
+LLM-as-a-Judge Setup.To quantify thefluencyandcoherenceof generated continuations we
+follow the increasingly adopted LLM-as-a-Judge evaluation. This method has been shown to result in
+similar evaluation as human judgment [60]. Specifically, each post-prefix sentence is scored by the
+instruction-tunedGemini-2.0-Flashmodel and issued the following prompt:
+“You are a language expert evaluating the fluency and coherence of the following AI-
+generated sentence. . . Give a single integer score between 0 (poor) and 100 (excellent), with
+no explanation or comments. ”
+The model returns a single scalar s∈[0,100] for each sentence. Using an LLM evaluator offers two
+key advantages: (i) strong correlation with human judgments at negligible annotation cost, and (ii)
+scalability for thousands of evlautions performed in various experiments.
+Discrete Diffusion Base Model.While in Section 5.1, we directly utilize the pretrained MDLM
+checkpoint provided by [ 7], for the experiments in Section 5.3, we pretrain and subsequently
+instruction-tune a slightly larger MDLM model, adopting the Llama 1 tokenizer. Empirical ob-
+servations indicated that employing a marginally larger model and vocabulary size was essential for
+optimal performance on instruction-guided tasks. Consequently, we adopt this enhanced model for all
+subsequent evaluations in this context, including both the base MDLM experiments and the proposed
+CDD framework. Our instruction tuning is conducted using the ShareGPT dataset, and all pretraining
+follows the design choices and hyperparameters provided by [7].
+B.3.1 Counting Constraints
+Instruction-Tuning Dataset.We manually construct a dataset of letter counting examples in an
+instruction-tuning format. We use random words and select a random character from these words
+80% of the time. The other 20% of the time we select a letter at random, which may or may not be
+contained in the word, to represent cases where the correct answer is zero.
+Projection Operator.Our implementation of this projection operator involves integrating an
+external module to count the number of times a specific letter appears in a given word. First, we
+leverage the external module to obtain the accurate count, ensuring that the correct numerical value is
+determined. Then, during output generation, we adjust the probability distribution over the numerical
+tokens so that the token corresponding to this count is assigned the highest probability, while the
+probabilities of other numerical tokens are appropriately diminished. This approach guarantees that
+when the model is queried about the frequency of a letter in a word, it outputs the correct numerical
+token with the highest weight in the distribution, maintaining consistency and precision in the final
+answer.
+B.3.2 Lexical Constraints
+Instruction-Tuning Dataset.We finetune models on a dataset of examples constructed from
+evaluation of GPT-4 on the COLLIE dataset provided by Yao et al.[49]. As GPT-4 performs well on
+these examples, we apply knowledge distillation by compiling these generations into an instruction
+tuning dataset. The dataset can be directly constructed from the logs included in the code base from
+Yao et al.
+Projection Operator.Our implementation of the projection operator begins by parsing the decoded
+string to locate the position corresponding to the nth word. Because token indices do not necessarily
+match word indices, owing to the nuances of subword tokenization, we perform an alignment
+procedure that accurately maps word positions to their respective token indices. Once the index in
+20
+--- PAGE 22 ---
+The main trends are summarized in Figure 7 and exhaustively detailed in Table 3.
+Figure 8: Effect of constraint-checking frequency on runtime and perplexity.
+Frequency AblationWe further perform an ablation study with different inspection frequencies.
+This ablation examines the trade-off between sample quality, constraint satisfaction, and runtime. A
+more frequent schedule results in consistent adherence at a price of increased compute and runtime.
+We observe as the inspection frequency increases the average runtime decreases consistently. By
+analyzing this we demonstrate this method’s robustness and note that for all settings, constraint
+satisfaction is met. Results are shown in Figure 8.
+Figure 9: Constraint-checking start analysis on perplexity and runtime.
+Constraint Start AblationWe include a constraint -start ablation, where we examine the run-
+time/perplexity tradeoff by turning the projection operator on only after specific amounts of
+reverse-diffusion steps. Early enforcements allows the projection to satisfy the constraints at very
+early iterations at the cost of increased runtime. Notably, across all setting, constraint satisfaction is
+met for all samples.
+D Runtime Analysis
+To benchmark the computational overhead of CDD as compared to the baselines, we compare the
+runtime of our method and the other baselines on the toxicity mitigation task. To normalize for the
+overhead of base models (MDLM and GPT2), we make two adjustment: we reduce the number
+of diffusion steps from 1000 to 100 and adjust the generation sequence length to 1024; prior work
+on discrete diffusion has indicated that these hyperparameters can be used to approximately match
+the inference time of autoregressive models [ 9]. Empirically, we find that, while the speed is not
+identical, these adjustments result in a much more similar tokens-per-second rate for the base models.
+Practically, MDLM could be accelerated even further by reducing the number of diffusion steps
+further, but we abstain from this so as to maintain consistency with the baselines. For every system
+we report the mean generation time, the 25th/50th/75th percentiles, and the slowdown relative to the
+respective baseline.
+22
+--- PAGE 23 ---
+ALM hyper-parameters Perplexity Wall-clock time (s) LLM-Judge
+LRµ init Loops Mean 25% 50% 75% Mean 25% 50% 75% Score
+0.20 1 10 53.97 29.91 44.33 66.18 258.52 10.75 12.29 153.54 18.59
+0.20 1 25 64.92 28.54 44.34 66.53 448.47 13.15 15.02 374.19 19.46
+0.20 1 50 61.95 31.44 45.58 74.66 637.53 13.18 14.82 454.52 20.29
+0.20 5 10 60.25 29.15 45.31 71.67 236.39 13.49 15.74 130.67 20.09
+0.20 5 25 59.78 28.56 44.38 72.20 343.61 10.54 11.92 192.14 19.64
+0.20 5 50 79.71 28.32 44.53 71.44 809.47 10.60 11.93 307.58 19.31
+0.20 10 10 57.42 27.69 42.31 75.10 194.37 10.97 13.46 105.79 19.61
+0.20 10 25 58.64 27.45 43.73 67.97 636.73 10.56 12.15 126.59 19.25
+0.20 10 50 64.90 29.97 45.67 72.46 760.28 11.03 13.86 186.85 20.49
+0.40 1 10 64.45 30.65 45.00 74.42 149.41 10.80 12.87 113.80 20.01
+0.40 1 25 62.11 33.07 46.49 76.91 223.79 10.55 12.07 200.18 20.44
+0.40 1 50 58.95 29.10 44.23 72.99 356.07 10.50 11.52 175.66 20.15
+0.40 5 10 58.33 28.29 43.18 66.50 124.73 10.63 11.57 104.85 20.00
+0.40 5 25 68.55 29.19 45.34 69.38 213.77 10.66 11.76 204.08 20.11
+0.40 5 50 73.02 31.72 45.83 76.92 220.34 10.65 11.74 81.31 20.18
+0.40 10 10 69.06 29.22 45.00 73.44 136.86 10.63 12.00 95.29 19.67
+0.40 10 25 61.22 30.51 45.34 72.76 193.70 10.77 12.01 123.57 20.11
+0.40 10 50 102.30 32.47 46.62 74.88 250.82 10.70 12.44 135.07 19.77
+0.60 1 10 66.69 30.22 45.67 74.00 106.81 10.82 11.77 94.56 19.67
+0.60 1 25 87.59 32.07 45.77 69.40 196.40 10.77 12.04 170.36 19.10
+0.60 1 50 126.00 30.38 46.98 74.85 228.66 10.64 12.02 153.14 19.23
+0.60 5 10 65.16 31.96 44.59 72.71 97.96 10.89 12.13 71.26 19.57
+0.60 5 25 64.33 29.15 45.80 77.38 144.82 10.76 11.87 144.06 19.34
+0.60 5 50 93.99 31.56 47.41 76.91 211.75 10.91 12.14 141.92 19.65
+0.60 10 10 65.32 30.79 46.20 77.53 87.94 11.11 12.73 50.27 19.98
+0.60 10 25 68.26 30.51 47.78 75.92 158.64 10.76 11.96 70.02 19.27
+0.60 10 50 71.86 29.99 44.51 72.47 167.33 10.85 12.17 105.36 19.55
+0.80 1 10 74.68 31.81 47.64 78.54 96.14 10.75 11.83 50.56 18.83
+0.80 1 25 77.26 30.62 45.77 76.91 158.28 10.77 11.77 115.30 20.57
+0.80 1 50 84.82 30.51 45.77 77.38 297.94 11.90 15.24 157.88 19.91
+0.80 5 10 68.87 29.05 44.67 70.50 85.59 14.12 16.06 38.68 19.34
+0.80 5 25 60.04 26.73 44.05 68.03 129.18 14.84 17.11 64.22 19.60
+0.80 5 50 56.15 27.77 44.24 69.18 175.82 15.61 17.76 88.31 19.41
+0.80 10 10 74.68 28.95 45.31 74.14 88.95 15.62 17.56 65.28 19.14
+0.80 10 25 78.71 29.99 45.67 69.43 146.18 14.99 16.95 105.86 19.41
+0.80 10 50 66.70 28.29 44.24 75.66 134.23 10.65 11.74 74.80 19.50
+Table 3: Perplexity and wall-clock time statistics, together with LLM-Judge coherence scores, across
+all ALM hyper-parameter settings.
+Toxicity – Runtime
+Model Size Runtime (s) Increase
+FactorMean25% 50% 75%
+GPT2 124M 10.31 10.28 10.32 10.36 –
+GPT2PPLM 124M 878.47 857.38 869.69 887.41 85.21
+GPT2FUDGEλ=2 124M 1387.28 1386.47 1387.00 1387.73 134.56
+GPT2FUDGEλ=9 124M 1481.94 1479.71 1480.27 1484.47 143.74
+Llama 3.2 1B 16.43 16.38 16.44 16.46 –
+MDLM 110M 4.59 4.40 4.49 4.74 –
+CDDτ= 0.25 (Ours)110M 401.15 9.09 9.67 11.71 87.02
+CDDτ= 0.50 (Ours)110M 230.89 9.19 9.62 10.46 50.08
+CDDτ= 0.75 (Ours)110M 63.71 9.20 9.56 10.21 13.82
+Table 4: Runtime statistics for all evaluated models and respective runtime increase from base model.
+Boldand underlined values mark the best and second-best time increase factor, respectively.
+23
+--- PAGE 24 ---
+Notably, we find that even without optimizing for runtime (besides selecting specific ALM hyperpa-
+rameters) CDD provides theleast additional overheadas compared to other controllable generation
+methods. Further adjustment (e.g., hot-starting the ALM projection, further reduction in diffusion
+steps) could be made to increase this margin even further.
+E Entropy Analysis
+For the toxicity application, we additionally evaluate CDD and its unconstrained base model using
+entropy. As described in [ 10], entropy measures the diversity of the generated sequence. For a
+generated sequence of length L with K distinct tokens, let Lk denote the count of token k, and define
+the token probabilities pk =L k/L. The entropy of this distribution is − PK
+k=1 pk logp k. Lower
+entropy indicates that probability mass is concentrated on a few tokens, reflecting a lower diversity,
+whereas a higher entropy indicates a more uniform token usage and greater generative diversity.
+As observed in Table 5, across all thresholds, CDD results in a negligible entropy decrease of
+0.59–1.0% compared to the base model. As the decrease is small and within narrow confidence
+intervals, this validates that CDD preserves generative diversity.
+Model Size Mean Entropy 95% CI % Decrease
+MDLM 110M 5.577 0.0178 –
+CDDτ= 0.25 110M 5.521 0.0709 1.00
+CDDτ= 0.50 110M 5.519 0.0851 1.04
+CDDτ= 0.75 110M 5.544 0.0709 0.59
+Table 5: CDD mean entropy, 95% confidence intervals, and percent decrease from base model at
+different thresholds for the toxicity application.
+F Missing Proofs
+Proof of Theorem 4.1
+Proof. We begin by proving this bound holds for projected diffusion methods operating in the image
+space:
+DKL(x′
+s,C)≤(1−α t)D KL(x′
+t,C) +α 2
+t+1G2,(9)
+For ease of notation, we will denote subsequent timestep in terms of an arbitrary t, such that
+xt−1 =x s and the subsequent timestep after that is denotedx t−2, etc.
+Consider that at each iteration of the denoising process, projected diffusion methods can be split into
+two steps:
+1.Gradient Step:x ′
+t =x t +γ t ∇xt logq t(xt)| {z }
+st
+2.Projection Step:x t−1 =P C(x′
+t)
+These steps are sequentially applied in the reverse process to sample from a constrained subdistribu-
+tion.
+xt →
+x′
+t
+z }| {
+xt +γ tst → PC(x′
+t) =x t−1 →
+x′
+t−1
+z }| {
+xt−1 +γ t−1st−1 → PC(x′
+t−1) =x t−2 . . .
+By construction,x t−1 =P C(x′
+t)∈C. Next, let us define the projection distance toCas:
+f(x) =D KL(x,C) =D KL (x∥PC(x))
+SinceCisβ-prox regular, by definition the following hold:
+24

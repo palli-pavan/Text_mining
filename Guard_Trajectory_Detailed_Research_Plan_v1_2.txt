@@ -1,0 +1,837 @@
+GUARD-TRAJECTORY
+
+Training-Free Real-Time Monitoring and Safety Interception in Discrete Diffusion Language Models
+
+Version 1.2 | 9 October 2026
+
+Planning document. The planned plots are not experimental results; they must be generated from actual runs.
+
+1. Direct answer: datasets we will use
+
+Primary dataset: RealToxicityPrompts. It supplies English prompts for testing whether generated continuations become toxic. We will create a fixed, documented subset and prompt/seed manifest. The initial reference-compatible subset may filter prompts with source toxicity > 0.5 and source perplexity < 30, but we will also consider a broader held-out subset to avoid evaluating only high-risk prompts.
+
+Priority
+
+Dataset
+
+Role in this project
+
+Required now?
+
+Primary
+
+RealToxicityPrompts
+
+Generation prompts; main end-to-end evaluation of MDLM and Guard-Trajectory.
+
+YES
+
+Primary labels/scorer validation
+
+Jigsaw Toxic Comment Classification Challenge
+
+Toxicity-labeled comments to validate candidate scorers; optional training data for one small scorer if needed.
+
+Recommended
+
+Robustness
+
+Civil Comments / Jigsaw Civil Comments
+
+Check scorer robustness and false positives across different text types; optional secondary test.
+
+Later
+
+Robustness
+
+ToxiGen
+
+Stress-test toxicity/hate-speech detection under challenging examples; optional.
+
+Later
+
+Optional
+
+ETHOS
+
+Additional hate-speech/toxicity classification test if time and compatible labels permit.
+
+Optional
+
+Backbone provenance
+
+OpenWebText / pretrained MDLM checkpoint
+
+MDLM was pretrained on an OpenWebText-based corpus; we use the published checkpoint rather than retraining on this corpus.
+
+No new download/retraining required for the initial project
+
+Project-generated manifest
+
+Prompt IDs + split + seed + model/policy configs
+
+Makes paired experiments reproducible and supports confidence intervals.
+
+YES
+
+Important: RealToxicityPrompts is the primary generation benchmark. Jigsaw is mainly for scorer evaluation/training—not the primary set of prompts for MDLM generation. Civil Comments, ToxiGen and ETHOS are optional robustness datasets and should be added only after the baseline and primary evaluation work.
+
+2. Are different plots and graphs included?
+
+The earlier document listed several figures, but it did not spell out the full visual-analysis plan as explicitly as it should. This updated version specifies different plot types, what each plot answers, and the data each requires. We will not fabricate result plots; they will be produced by scripts from CSV/JSONL experiment logs.
+
+Plot type
+
+What to plot
+
+Research question answered
+
+Line plot with confidence band
+
+Mean risk score at each reverse-diffusion step; separate final-safe and final-violating samples.
+
+Does intermediate risk rise early enough to warn about final violations?
+
+ROC curve and Precision–Recall curve
+
+Intermediate score predicting whether the final generated output violates the selected threshold.
+
+How well does trajectory monitoring detect future violations?
+
+Bar plot or dot-and-whisker plot
+
+Violation rate for each policy, with 95% confidence intervals.
+
+Which method reduces violations, and is the difference uncertain?
+
+Scatter plot / Pareto frontier
+
+Runtime overhead on x-axis, violation rate or quality loss on y-axis; annotate methods.
+
+Which method gives the best safety–compute trade-off?
+
+Box plot / violin plot
+
+Per-sample latency, toxicity scores, PPL, and intervention counts by method.
+
+Are averages hiding unstable or slow cases?
+
+Heatmap
+
+Scorer disagreement, correlation, false-positive/false-negative rates, or ablation effects.
+
+Do models fail in similar ways? Does an ensemble help?
+
+Calibration/reliability plot
+
+Predicted risk bins versus observed violation frequency.
+
+Can the score be interpreted as a probability, or does it need calibration?
+
+Ablation line/bar plot
+
+Performance while changing risk threshold, minimum persistence, check interval, intervention budget, and scorer count.
+
+Which controller components matter?
+
+Histogram/density plot
+
+Final toxicity score distribution per policy, with the violation threshold marked.
+
+Does the method shift the whole distribution or only a few outputs?
+
+Trajectory example plots
+
+Risk score and decisions across steps for representative successful and failed samples.
+
+What happens during an individual generation?
+
+Model comparison horizontal bar plot
+
+AUROC/AUPRC/F1/latency for all scorers that successfully run.
+
+Which of the 20–30 candidate scorers is useful and affordable?
+
+Confusion matrix
+
+Final-violation prediction for selected scorer/policy settings.
+
+What kinds of mistakes remain?
+
+3. Research objective and key questions
+
+Aim: build a training-free, trajectory-aware safety controller for pretrained masked discrete diffusion language generation. It monitors intermediate states or predicted clean-text candidates, estimates safety risk, and decides whether to continue sampling or apply a validated intervention.
+
+Question
+
+Measurements
+
+RQ1: Do intermediate states predict final violations before generation finishes?
+
+AUROC/AUPRC, precision/recall, detection lead time, false alarms, risk trajectories.
+
+RQ2: Does adaptive intervention reduce final violations compared with simple baselines?
+
+Violation rate, absolute percentage-point reduction, paired confidence intervals.
+
+RQ3: Does adaptive intervention improve the safety/quality/runtime trade-off?
+
+Latency, overhead, PPL/reference quality, coherence, diversity, VRAM.
+
+RQ4: Does scorer selection or an ensemble improve reliability?
+
+Scorer accuracy, calibration, latency, disagreement, false positives and negatives.
+
+4. Role of the reference paper
+
+The uploaded reference, Constrained Discrete Diffusion (CDD), is a methodological and evaluation reference only. It evaluates constrained generation, including toxicity mitigation with RealToxicityPrompts and a toxicity surrogate trained on Jigsaw data. It also examines projection frequency/start-time and notes computational overhead. Therefore, our proposed contribution must not be presented as merely 'intervene late' or 'intervene less often'. The central hypothesis is that trajectory signals, risk persistence/uncertainty, and a risk-budgeted adaptive controller can inform when intervention is needed.
+
+The first implementation gate is to inspect the real MDLM sampler and determine which intermediate states, logits, or predicted-clean distributions are accessible. Do not assume the API. Also, a scalar risk value added uniformly to every vocabulary logit cannot steer generation because it does not change softmax probabilities.
+
+5. Models: generative backbone versus safety scorers
+
+5.1 Generative model
+
+Use the pretrained `kuleshov-group/mdlm-owt` MDLM checkpoint from the official MDLM repository. We will not retrain the diffusion backbone. Start with short outputs and a small number of diffusion steps for debugging, then lock settings for experiments.
+
+5.2 Compare 20–30+ safety-scoring models
+
+We will maintain a registry of 20–30 or more candidate toxicity/offensive-language/hate-speech scorers, but the actual number successfully evaluated depends on checkpoint availability, license, label compatibility, and hardware. We will not claim all candidates were evaluated if they only appear in a registry.
+
+Candidate family
+
+Target number
+
+Use
+
+Dedicated toxicity classifiers
+
+8–10
+
+Primary score candidates; evaluate threshold semantics and calibration.
+
+Hate/offensive-language classifiers
+
+4–5
+
+Complementary detectors; not treated as identical to toxicity.
+
+Moderation models/APIs
+
+2–4
+
+Optional, subject to access, privacy, cost, and separate latency accounting.
+
+NLI/semantic-risk models
+
+2–3
+
+Only for clearly defined auxiliary tasks; not assumed to be toxicity detectors.
+
+Lightweight classifiers
+
+3–5
+
+Speed/VRAM alternatives.
+
+Additional architecture/checkpoint variants
+
+3–5
+
+Diverse training data and model families.
+
+These categories yield a target catalogue of roughly 22–32 candidates. Exact model IDs must be checked and recorded at implementation time. The main generator stays fixed; the models being compared are primarily the safety scorers. Training 20–30 generative models is not recommended for this project and is not required to make a useful comparison.
+
+5.3 Training plan
+
+MDLM: pretrained, frozen; inference only.
+
+Scorer candidates: use pretrained checkpoints first; benchmark on a held-out labeled set.
+
+Optional: train one small classifier on Jigsaw training data only if existing scorers are unsuitable; tune on validation, report on test.
+
+Trajectory policy: begin with interpretable rules and ablations; a learned policy is an optional future extension.
+
+Ensemble: compare best single scorer to calibrated mean/max/disagreement-aware combinations, using validation data only.
+
+6. Technologies
+
+Component
+
+Technology
+
+Purpose
+
+Runtime/environment
+
+Python, Conda
+
+Repeatable local environment.
+
+Deep learning
+
+PyTorch, compatible CUDA build
+
+MDLM sampling and compatible scorers.
+
+Backbone/checkpoint
+
+Official MDLM repository, Hugging Face Hub
+
+Pretrained discrete diffusion generation.
+
+Scorer loading
+
+Transformers / model-specific APIs
+
+Load classifier checkpoints; verify output labels per model.
+
+Data/logs
+
+pandas, NumPy, JSONL/CSV
+
+Manifests, trajectories, results.
+
+Metrics/statistics
+
+scikit-learn, SciPy, bootstrap analysis
+
+Classification metrics and confidence intervals.
+
+Plots
+
+Matplotlib (Seaborn optional)
+
+All figures described in Section 2.
+
+Experiment tracking
+
+Git, config files, CSV/JSONL; optional offline experiment tracker
+
+Versioning, seeds, audit trail.
+
+Paper
+
+Word and/or LaTeX/Overleaf
+
+Manuscript and supplementary material.
+
+Hardware note: plan around the available RTX 3050 Laptop GPU with 4 GB VRAM. Start with batch size 1, short sequences, sequential scorer loading, and CPU fallback for larger models. Verify the actual environment and baseline before scaling.
+
+7. Proposed method and policies
+
+Policy
+
+Description
+
+P0 baseline
+
+Normal MDLM generation; no guard.
+
+P1 post-hoc filter
+
+Score final text; flag/reject without changing the generation trajectory.
+
+P2 every-step
+
+Score/intervene at every eligible step after a risk trigger.
+
+P3 fixed interval
+
+Score/intervene at a fixed interval.
+
+P4 late start
+
+Enable intervention after a predetermined part of reverse diffusion; ablation, not standalone novelty.
+
+P5 adaptive trajectory
+
+Use risk magnitude, persistence, scorer disagreement/uncertainty, diffusion stage and intervention budget.
+
+P6 adaptive + ensemble
+
+Adaptive policy with a validated scorer shortlist/ensemble.
+
+P7 CDD comparison
+
+Only if fair reproduction is feasible; report all deviations.
+
+Before a real intervention is implemented, test monitor-only mode. If a black-box scorer returns only one scalar, do not pretend that scalar is a valid gradient for token-level steering. The intervention must explicitly change token-specific preferences or perform a justified constrained projection/reranking operation, and must pass tests for normalization, NaNs, and guard-off equivalence.
+
+8. Experimental plan
+
+Experiment
+
+Plan
+
+Deliverable
+
+E0 baseline
+
+Same prompt/seed set, unguarded MDLM.
+
+Baseline output, safety score, latency, memory.
+
+E1 trajectory prediction
+
+Log risk at selected reverse steps without intervening.
+
+Risk curves, early-detection metrics.
+
+E2 policy comparison
+
+Compare P0–P6 on paired prompts/seeds.
+
+Main results table and confidence intervals.
+
+E3 scorer benchmark
+
+Score cached texts with all compatible candidate models.
+
+Accuracy/calibration/latency registry.
+
+E4 ensemble
+
+Best single scorer versus ensemble methods.
+
+Evidence whether multiple scorers help.
+
+E5 threshold sensitivity
+
+Test relevant thresholds, e.g. 0.25, 0.50, 0.75 if the scorer scale supports them.
+
+Threshold curves and violation distribution.
+
+E6 ablation
+
+Remove persistence, uncertainty, timestep, budget; vary check interval.
+
+Ablation plots/tables.
+
+E7 robustness
+
+Held-out prompts and optional Civil Comments/ToxiGen scorer tests.
+
+Robustness report.
+
+E8 external comparison
+
+CDD only if reproducible and comparable.
+
+Carefully qualified baseline comparison.
+
+9. Metrics
+
+Metric
+
+Definition / purpose
+
+Violation rate
+
+100 × outputs with final score > threshold / all evaluated outputs.
+
+Absolute reduction
+
+Baseline violation rate minus method violation rate in percentage points.
+
+Early-detection recall
+
+Share of eventual violations flagged at least a specified number of steps before completion.
+
+AUROC/AUPRC
+
+Predict final violation from intermediate risk; use AUPRC especially for imbalanced labels.
+
+Precision/false-positive rate
+
+Quantifies false alarms/overblocking.
+
+Quality
+
+Fixed reference-model PPL or score, coherence/relevance rubric, diversity metrics.
+
+Runtime
+
+Wall-clock time per sample and overhead: (method time − baseline time)/baseline time × 100%.
+
+Resource use
+
+Peak GPU VRAM and, where feasible, CPU RAM.
+
+Intervention rate
+
+Actual interventions / eligible decision points, plus count per sample.
+
+10. Sample sizes and data protocol
+
+Debug: 5 prompts × 1 seed; short sequences and few steps.
+
+Pilot: 25–50 prompts.
+
+Main study: aim for 200–500 prompts and 3 seeds if feasible; 1,000 samples is a stretch target, not a promise.
+
+Use development/validation/test separation at prompt level; never tune on the final test set.
+
+Use paired prompts/seeds across policies and bootstrap 95% confidence intervals.
+
+Record dataset version, prompt ID, seed, checkpoint revision, scorer version, config, timestamps, output score and failures.
+
+11. Final deliverables
+
+Working codebase with MDLM sampler adapter, monitor, scorer registry, policies, validated intervention, metrics, tests and configs.
+
+Dataset manifest and documented splits/filtering rules.
+
+20–30+ candidate scorer registry with actual tested status, model IDs, labels, license, quality metrics and latency.
+
+Per-step trajectory logs and final outputs with independent final scoring.
+
+Reproducible tables and graphs from experiment data.
+
+Conference paper with method, related work, experimental results, ablations, limitations, ethics, and reproducibility details.
+
+12. Implementation roadmap
+
+Verify Python/PyTorch/CUDA and run one short MDLM baseline sample.
+
+Inspect the sampler loop and identify the actual intermediate-state/predicted-clean outputs.
+
+Add monitor-only logging and prove fixed-seed baseline behavior is unchanged.
+
+Build the scorer registry and run smoke tests for 20–30 candidate models; fully benchmark compatible candidates.
+
+Measure whether intermediate scores predict final violations.
+
+Implement and unit-test one valid intervention.
+
+Run pilot; lock thresholds and policy settings on development/validation only.
+
+Run main paired experiments and scorer/ensemble comparisons.
+
+Generate every plot from recorded CSV/JSONL with scripts; audit missing values and failures.
+
+Write the conference manuscript using only verified experimental results.
+
+13. Results table template (fill only from real runs)
+
+Method
+
+Violation %
+
+Quality/PPL
+
+Coherence
+
+Diversity
+
+Latency
+
+Overhead %
+
+Peak VRAM
+
+95% CI
+
+Baseline MDLM
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+0
+
+TBD
+
+TBD
+
+Post-hoc filter
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+Fixed interval
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+Late start
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+Adaptive trajectory
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+Adaptive + ensemble
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+TBD
+
+All entries remain TBD until the experiments run. The goal is to produce real results, including negative or mixed findings, not to force a desired conclusion.
+
+14. Reference resources
+
+Cardei et al. (2025), Constrained Discrete Diffusion, NeurIPS 2025: https://proceedings.neurips.cc/paper_files/paper/2025/hash/124c1cc9f7750f512ed81cdbf2fd5bf5-Abstract-Conference.html
+
+Official MDLM repository: https://github.com/kuleshov-group/mdlm
+
+Pretrained MDLM checkpoint: https://huggingface.co/kuleshov-group/mdlm-owt
+
+RealToxicityPrompts: Gehman et al. (2020), RealToxicityPrompts: Evaluating Neural Toxic Degeneration in Language Models.
+
+Jigsaw Toxic Comment Classification Challenge: https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge
+
+15. Final recommendation (expanded in Version 1.2)
+
+Use RealToxicityPrompts as the primary generation dataset. Use Jigsaw to validate/optionally train a toxicity scorer, and add Civil Comments/ToxiGen/ETHOS only as secondary robustness checks if time allows. Start with the pretrained MDLM baseline and monitor-only trajectories. The key research evidence is whether intermediate scores predict final violations and whether an adaptive controller improves safety without unacceptable quality or runtime costs. The updated plot plan makes visual analysis an explicit deliverable; all result plots must come from actual experiments.
+
+16. Complete recommendation checklist (consolidated)
+
+This section consolidates the project recommendations so the plan can be followed as an implementation checklist. Items are recommendations, not claims that the experiments have already been completed.
+
+16.1 Research scope and claims
+
+Keep the pretrained MDLM generator fixed and frozen. The primary comparison is between safety scorers and monitoring/intervention policies, not between 20–30 separately trained diffusion generators.
+
+Treat Constrained Discrete Diffusion (CDD) as a reference and possible external baseline, not as the proposed method to copy. A CDD comparison is optional until a fair, reproducible implementation is feasible.
+
+Do not claim novelty based only on late intervention or lower intervention frequency; the reference paper already studies projection frequency and start time.
+
+Frame the core hypothesis around trajectory-aware early warning, risk persistence, uncertainty/disagreement, diffusion stage, and an explicit intervention budget. Claim these as contributions only if evidence supports them.
+
+Perform a focused literature review before making novelty claims, and compare methods under matched prompts, seeds, scoring thresholds, and compute settings where possible.
+
+Report negative, mixed, or null results honestly. Do not invent numbers, plots, significance, or successful model runs.
+
+16.2 Data and prompt design
+
+Use RealToxicityPrompts as the primary end-to-end generation benchmark. Record dataset version, source IDs, exact filtering criteria, and exclusions.
+
+Use Jigsaw Toxic Comment Classification Challenge as labeled data for scorer validation and, only if necessary, training one small auxiliary classifier. Keep train, validation, and test data separate.
+
+Consider Civil Comments, ToxiGen, and ETHOS only as secondary robustness checks after the main pipeline works; document label differences and avoid treating hate, offensiveness, and toxicity as identical labels.
+
+Create a reproducible prompt manifest with prompt ID, split, seed, prompt text or source reference, model/checkpoint revision, policy/config version, and run status.
+
+Use prompt-level development/validation/test splits to prevent prompts or near-duplicates from leaking across splits. Tune thresholds and policies on development/validation only.
+
+For controlled stress tests, add clearly labeled safe, ambiguous/boundary, and unsafe prompt categories. Cover relevant broad categories such as harassment, hate, self-harm, violence, dangerous instructions, sexual content, illegal activity, and privacy. Keep unsafe examples non-operational and use them only for evaluation; document how they were constructed.
+
+Pair prompts and random seeds across all policies. Begin with 5 prompts × 1 seed for debugging, 25–50 prompts for the pilot, and target 200–500 prompts × 3 seeds for the main study if compute permits. Treat 1,000 samples as a stretch goal, not a requirement.
+
+Do not download or retrain on OpenWebText for the initial project; it is the provenance of the pretrained MDLM checkpoint, not the primary safety evaluation dataset.
+
+16.3 Model and scorer registry
+
+Build a registry of 20–30+ candidate safety scorers across dedicated toxicity classifiers, hate/offensive-language classifiers, lightweight alternatives, model/checkpoint variants, and optional moderation APIs. NLI/semantic-risk models should only be included for a clearly defined auxiliary task.
+
+Verify exact checkpoint IDs, revision hashes, licenses, label names/order, score semantics, tokenizer requirements, model size, and hardware compatibility before counting a candidate as tested.
+
+Store attempted, loaded, compatible, benchmarked, and failed statuses separately. Report the actual number of models evaluated; do not present a list of model names as completed experiments.
+
+Smoke-test each candidate first, then benchmark compatible candidates on cached text so scorer comparisons use the same examples. Load models sequentially where memory is limited.
+
+Evaluate scorers using AUROC, AUPRC, precision, recall, F1, confusion matrices, false-positive/false-negative analysis, calibration (Brier score/ECE if feasible), inference latency, and memory use.
+
+Compare the strongest validated single scorer with simple mean/max combinations and a disagreement-aware ensemble. Fit any calibration or ensemble weights using validation data only.
+
+Use an independent final evaluator where feasible to reduce circular evaluation. State clearly that proxy toxicity classifiers can be biased, imperfect, and sensitive to dialect or topic.
+
+16.4 Implementation order and technical safeguards
+
+First verify the actual Conda/Python/PyTorch/CUDA setup and run a short, unguarded MDLM baseline from the official repository. Save the full command, environment versions, logs, configuration, and generated output.
+
+Inspect the actual MDLM reverse-sampling loop before writing adapters. Identify what is available at each step: masked state, logits, predicted clean tokens/text, confidence, entropy, mask count, timestep, and any supported callback. Do not assume these values or APIs exist.
+
+Implement monitor-only trajectory logging before any intervention. With fixed prompts and seeds, prove that enabling the logger does not change the generated output or baseline behavior.
+
+Log at least timestep, current state/reference, predicted-clean candidate where available, risk score, entropy/confidence if available, masked-token count/fraction if available, policy decision, actual intervention applied, intervention reason, and per-step runtime. Avoid logging sensitive data unnecessarily.
+
+Distinguish a proposed intervention from an intervention actually applied. Update last-intervention timestamps/counters only after a real change is applied.
+
+Never add a scalar risk score uniformly to every vocabulary logit: this does not change the softmax distribution. A valid intervention must make token-specific changes or use a justified projection, constrained mask, candidate reranking, or resampling method supported by the sampler.
+
+Add unit tests for policy decisions, intervention behavior, probability normalization, no NaNs/Infs, deterministic behavior under fixed seeds, and guard-off/no-op equivalence. Test on tiny examples before running full experiments.
+
+Preserve the pretrained MDLM weights. Start with batch size 1, short sequences (64–128 tokens), and 25–50 steps; use sequential scorer loading and CPU fallback for models that do not fit in 4 GB VRAM. Increase scale only after profiling.
+
+Keep a clear separation between proposed policy decision, attempted intervention, successful intervention, and final outcome. Record exceptions, timeouts, OOM errors, and failed runs rather than silently dropping them.
+
+16.5 Policies and experiments to compare
+
+P0: unguarded baseline MDLM.
+
+P1: post-hoc final-output filter/flag; report rejection or regeneration costs and do not portray it as in-trajectory steering.
+
+P2: intervention at every eligible step after a defined trigger.
+
+P3: fixed-interval intervention.
+
+P4: fixed late-start intervention as an ablation/control, not the sole novelty claim.
+
+P5: adaptive trajectory policy using risk magnitude, persistence/trend, uncertainty or scorer disagreement, diffusion stage, and intervention budget.
+
+P6: adaptive policy with a validated scorer ensemble.
+
+P7: CDD-inspired/external comparison only if implementation, compute, thresholds, and evaluation are sufficiently comparable; clearly report deviations.
+
+Run baseline and monitor-only experiments first, then trajectory-prediction tests, policy comparisons, scorer benchmark, ensemble comparison, threshold sensitivity, ablations, robustness tests, and optional external comparison.
+
+Ablate trajectory information, timestep/stage, uncertainty/disagreement, risk trend/persistence, thresholds, checking intervals, intervention budget, scorer count, and ensemble method. Include an intervention-off control.
+
+16.6 Metrics and statistical reporting
+
+Report violation rate with the exact scorer and threshold; absolute percentage-point reduction; relative reduction where useful; and paired confidence intervals.
+
+Report early-warning AUROC/AUPRC, precision, recall, false-alarm rate, lead time before generation ends, and intervention success rate.
+
+Report output quality using a fixed reference-language-model perplexity where meaningful, coherence/relevance evaluation with a stated rubric or judge, and diversity measures such as distinct n-grams, entropy, or self-BLEU with exact protocol.
+
+Report latency per sample, runtime overhead = (method time − baseline time) / baseline time × 100%, number of extra scorer calls/forward passes, intervention count/rate, peak GPU VRAM, and CPU RAM where feasible.
+
+Use bootstrap 95% confidence intervals over prompts and paired prompt/seed comparisons. Report sample counts and missing/failed runs. Account for multiple comparisons when evaluating many scorers, and distinguish exploratory analysis from confirmatory tests.
+
+Choose thresholds on validation data, then freeze them for test evaluation. Report scorer-specific thresholds rather than assuming one numeric threshold is comparable across models.
+
+Include error analysis: representative successful and failed trajectories, false positives, false negatives, overblocking, quality degradation, and cases where scorers disagree.
+
+16.7 Complete visual-analysis catalogue
+
+Generate every result figure from actual raw CSV/JSONL logs with scripts. Include units, sample sizes, confidence intervals where appropriate, readable legends, fixed definitions, and reproducible filenames. The following catalogue supplements the tables already present in Section 2.
+
+Risk trajectory line plots with confidence bands, separating outputs that eventually pass/fail the final safety threshold.
+
+Entropy and token-confidence trajectories over reverse steps, where these quantities are accessible from the real sampler.
+
+Masked-token count/fraction over steps, and risk-versus-mask-fraction plots, where the sampler exposes masks.
+
+Risk score versus timestep and risk score versus intervention strength/gamma, only if an intervention-strength parameter is implemented and logged.
+
+Token-level heatmaps showing which positions/tokens were masked, predicted, flagged, or changed by an intervention; use only where the method can support accurate token attribution.
+
+ROC and precision–recall curves for early prediction of final violations, including lead-time analyses.
+
+Bar or dot-and-whisker plots of violation rates with 95% confidence intervals and sample counts.
+
+Safety–quality and safety–runtime Pareto plots; runtime overhead versus violation rate; quality loss versus violation reduction.
+
+Box/violin plots of toxicity score, PPL, coherence score, latency, memory, scorer calls, and actual intervention counts.
+
+Scorer comparison horizontal bars for AUROC/AUPRC/F1/calibration/latency, plus confusion matrices for selected scorers.
+
+Scorer correlation/disagreement heatmaps and heatmaps of false-positive/false-negative patterns across categories.
+
+Calibration/reliability curves, plus Brier score or ECE summaries if probability calibration is appropriate.
+
+Final toxicity-score histograms/density plots per policy with the chosen threshold marked.
+
+Individual trajectory plots for representative true-positive, false-positive, false-negative, and successful-intervention cases.
+
+Ablation plots for threshold, persistence, check interval, intervention budget, ensemble size, uncertainty use, timestep use, and risk trend.
+
+Failure-case gallery/table and category-wise results for safe, ambiguous/boundary, and unsafe prompt groups.
+
+Plots must be reproducible from scripts and raw logs. Clearly label any design illustration as illustrative; never mix illustrative values with experimental results.
+
+16.8 Paper, ethics, and reproducibility package
+
+Prepare the conference paper with title, abstract, keywords, introduction, problem definition, related work, method, system/algorithm, datasets, experimental setup, baselines, metrics, results, statistical analysis, ablations, limitations, ethics, conclusion, and references.
+
+Include a method diagram, sampler/controller pseudocode, dataset statistics table, model registry table, main comparison table, ablation table, runtime/resource table, and all figures that answer the research questions.
+
+Include a supplementary appendix with detailed configurations, hyperparameters, threshold selection, model IDs/revisions/licenses, prompt filters, seed policy, additional plots, failure cases, and reproducibility instructions.
+
+Publish or archive code/configs, manifests, environment specification, exact commands, scripts for processing logs and regenerating plots, and an explanation of any unavailable model/API or failed run.
+
+Document dataset/model licenses and intended use. Minimize exposure of personal data; keep unsafe prompt examples non-operational; discuss proxy-classifier bias, overblocking, underblocking, generalization limits, and computational limitations.
+
+Use the correct conference template and citation style after selecting a target venue. Do not claim a submission-ready paper until results, references, and reproducibility artifacts have been checked.
+
+17. Recommended first actions
+
+Activate the existing `mdlm` Conda environment and verify Python, PyTorch, CUDA availability, GPU name, and available VRAM.
+
+Run the smallest baseline sampling command supported by the cloned repository and save its complete output/error. Fix repository/configuration issues before adding the guard.
+
+Inspect the actual sampler code and write a short interface note identifying available intermediate states and logits.
+
+Create the project folders, configuration file, prompt manifest, and structured JSONL logger.
+
+Implement monitor-only mode and the no-op equivalence test before attempting any safety intervention.
+
+Only after the baseline and logging pass, smoke-test the scorer registry and proceed to a small pilot.
+
+Version 1.2 consolidates the recommendations discussed so far. Experimental findings remain TBD until measured.

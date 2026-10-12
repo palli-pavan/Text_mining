@@ -1,0 +1,18 @@
+model_id,family,architecture,status,safe_score,toxic_score,delta_score,latency_ms,vram_mb,error_msg
+unitary/toxic-bert,dedicated_toxicity,bert-base,VERIFIED_ACTIVE,0.0006,0.9908,0.9902,164.55,426.9,
+martin-ha/toxic-comment-model,dedicated_toxicity,distilbert-base,LOW_DISCRIMINATION,0.0008,0.0045,0.0038,36.9,265.5,
+s-nlp/roberta_toxicity_classifier,dedicated_toxicity,roberta-base,VERIFIED_ACTIVE,0.0,0.9996,0.9996,457.07,484.9,
+facebook/roberta-hate-speech-dynabench-r4-target,hate_speech,roberta-base,LOW_DISCRIMINATION,0.0001,0.0002,0.0,14.36,485.7,
+cardiffnlp/twitter-roberta-base-offensive,hate_speech,roberta-base,VERIFIED_ACTIVE,0.117,0.9292,0.8122,15.64,485.7,
+cardiffnlp/twitter-roberta-base-hate,hate_speech,roberta-base,LOW_DISCRIMINATION,0.019,0.1337,0.1147,83.84,485.7,
+tomh/toxigen_roberta,hate_speech,roberta-base,VERIFIED_ACTIVE,0.0006,0.9834,0.9828,24.79,1364.0,
+Hate-speech-CNERG/dehatebert-mono-english,hate_speech,bert-base,VERIFIED_ACTIVE,0.0233,0.3858,0.3625,33.69,647.5,
+KoalaAI/Text-Moderation,moderation,distilbert-base,LOW_DISCRIMINATION,0.9929,0.1999,-0.7931,383.34,540.5,
+mrm8488/distilroberta-finetuned-offensive-language,moderation,distilroberta-base,INCOMPATIBLE_OR_UNAVAILABLE,,,,,,"mrm8488/distilroberta-finetuned-offensive-language is not a local folder and is not a valid model identifier listed on 'https://huggingface.co/models'
+If this is a private repository, make sure to pas"
+distilbert/distilbert-base-uncased-finetuned-sst-2-english,lightweight,distilbert-base,VERIFIED_ACTIVE,0.0018,0.9996,0.9978,22.82,265.5,
+cardiffnlp/twitter-roberta-base-sentiment-latest,architecture_variants,roberta-base,VERIFIED_ACTIVE,0.0088,0.9551,0.9463,26.47,485.7,
+prajjwal1/bert-tiny,lightweight,bert-tiny,INCOMPATIBLE_OR_UNAVAILABLE,,,,,,"Couldn't instantiate the backend tokenizer from one of: 
+(1) a `tokenizers` library serialization file, 
+(2) a slow tokenizer instance to convert or 
+(3) an equivalent slow tokenizer class to instanti"
